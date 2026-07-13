@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DropBoard — Airdrop Intelligence</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap');
+
+  :root{
+    --ink:#0A0E13;
+    --panel:#0F151C;
+    --panel-2:#141C25;
+    --row-hover:#17212B;
+    --amber:#FFB000;
+    --amber-dim:#7A5A00;
+    --teal:#4FD1C5;
+    --teal-dim:#1E4A46;
+    --red:#FF5D5D;
+    --off:#EDE6D6;
+    --off-dim:#8A8F98;
+    --off-faint:#565C66;
+    --line:#1E2731;
+    --line-soft:#171E26;
+  }
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(1100px 550px at 85% -10%, rgba(79,209,197,0.05), transparent 60%),
+      radial-gradient(900px 500px at 0% 0%, rgba(255,176,0,0.035), transparent 55%),
+      var(--ink);
+    color:var(--off);
+    font-family:'Inter',sans-serif;
+    min-height:100vh;
+  }
+  .mono{font-family:'IBM Plex Mono',monospace;}
+  a{color:inherit;}
+
+  /* ---------- Ticker ---------- */
+  .ticker-wrap{
+    background:#000;
+    border-bottom:1px solid var(--line);
+    overflow:hidden;
+    white-space:nowrap;
+    padding:7px 0;
+  }
+  .ticker{
+    display:inline-block;
+    padding-left:100%;
+    animation:scroll 34s linear infinite;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:11.5px;
+    letter-spacing:0.4px;
+    color:var(--teal);
+  }
+  .ticker span{margin-right:44px;color:var(--off-dim);}
+  .ticker span b{color:var(--amber);font-weight:600;}
+  @keyframes scroll{0%{transform:translateX(0);}100%{transform:translateX(-100%);}}
+
+  /* ---------- Header ---------- */
+  header.hero{
+    padding:32px 24px 0;
+    max-width:1240px;
+    margin:0 auto;
+  }
+  .hero-top{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:16px;margin-bottom:22px;}
+  .eyebrow{
+    font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:2.5px;
+    color:var(--teal);text-transform:uppercase;margin-bottom:10px;
+  }
+  h1{
+    font-family:'IBM Plex Mono',monospace;font-size:clamp(26px,4.2vw,40px);
+    font-weight:700;margin:0 0 6px;color:var(--off);letter-spacing:-0.5px;
+  }
+  h1 .flap{color:var(--amber);}
+  .sub{color:var(--off-dim);font-size:13.5px;max-width:600px;line-height:1.55;}
+
+  .stat-strip{display:flex;gap:0;border:1px solid var(--line);border-radius:2px;overflow:hidden;}
+  .stat{padding:10px 18px;border-right:1px solid var(--line);min-width:108px;}
+  .stat:last-child{border-right:none;}
+  .stat-label{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--off-faint);}
+  .stat-val{font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:700;color:var(--off);margin-top:3px;}
+  .stat-val.teal{color:var(--teal);}
+  .stat-val.amber{color:var(--amber);}
+
+  /* ---------- Tabs ---------- */
+  .tabs{
+    display:flex;gap:4px;border-bottom:1px solid var(--line);
+    max-width:1240px;margin:0 auto;padding:0 24px;overflow-x:auto;
+  }
+  .tab-btn{
+    font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:0.8px;
+    text-transform:uppercase;background:none;border:none;color:var(--off-dim);
+    padding:13px 16px;cursor:pointer;position:relative;white-space:nowrap;
+  }
+  .tab-btn .n{color:var(--off-faint);font-size:10px;margin-left:5px;}
+  .tab-btn.active{color:var(--amber);}
+  .tab-btn.active::after{
+    content:'';position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--amber);
+  }
+  .tab-btn:hover:not(.active){color:var(--off);}
+
+  main{max-width:1240px;margin:0 auto;padding:24px 24px 80px;}
+  .view{display:none;}
+  .view.active{display:block;}
+
+  /* ---------- Toolbar ---------- */
+  .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;}
+  .toolbar input[type=text]{
+    background:var(--panel);border:1px solid var(--line);color:var(--off);
+    padding:8px 12px;font-family:'Inter',sans-serif;font-size:12.5px;border-radius:2px;
+    min-width:200px;
+  }
+  .toolbar input:focus{outline:none;border-color:var(--teal);}
+  select.filter{
+    background:var(--panel);border:1px solid var(--line);color:var(--off-dim);
+    padding:8px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;border-radius:2px;
+  }
+  .spacer{flex:1;}
+  .refresh-btn{
+    font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--teal);
+    background:transparent;border:1px solid var(--line);padding:8px 12px;
+    border-radius:2px;cursor:pointer;letter-spacing:1px;
+  }
+  .refresh-btn:hover{border-color:var(--teal);}
+  .refresh-btn:disabled{opacity:0.4;cursor:default;}
+  .src-tag{font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:var(--off-faint);letter-spacing:0.5px;}
+  .src-tag b{color:var(--teal);}
+
+  /* ---------- Panel / Table ---------- */
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:2px;}
+  .panel-head{display:flex;align-items:center;justify-content:space-between;padding:13px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap;gap:8px;}
+  .panel-title{font-family:'IBM Plex Mono',monospace;font-size:12.5px;letter-spacing:1.5px;text-transform:uppercase;color:var(--off);}
+  .panel-title .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--teal);margin-right:8px;box-shadow:0 0 8px var(--teal);}
+
+  table{width:100%;border-collapse:collapse;}
+  thead th{
+    text-align:left;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:1px;
+    text-transform:uppercase;color:var(--off-faint);padding:9px 16px;border-bottom:1px solid var(--line);
+    cursor:pointer;user-select:none;white-space:nowrap;
+  }
+  thead th:hover{color:var(--teal);}
+  thead th.sorted{color:var(--amber);}
+  tbody tr{border-bottom:1px solid var(--line-soft);animation:flapIn 0.4s ease;}
+  tbody tr:hover{background:var(--row-hover);}
+  tbody tr:last-child{border-bottom:none;}
+  tbody td{padding:11px 16px;font-family:'IBM Plex Mono',monospace;font-size:12px;white-space:nowrap;}
+  td.name-cell{font-family:'Inter',sans-serif;font-weight:600;font-size:13px;color:var(--off);white-space:normal;}
+  td.name-cell .cat{display:block;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--off-dim);text-transform:uppercase;letter-spacing:0.4px;margin-top:2px;font-weight:400;}
+  td.num{text-align:right;color:var(--off);}
+  .up{color:var(--teal);}
+  .down{color:var(--red);}
+  .flat{color:var(--off-dim);}
+  @keyframes flapIn{from{opacity:0;transform:translateY(-3px);}to{opacity:1;transform:translateY(0);}}
+  .rank-badge{
+    display:inline-block;width:22px;text-align:center;font-family:'IBM Plex Mono',monospace;
+    font-size:10.5px;color:var(--off-faint);
+  }
+  .status-pill{
+    font-size:9px;letter-spacing:0.8px;text-transform:uppercase;padding:3px 7px;border-radius:2px;
+    text-align:center;background:rgba(255,176,0,0.1);color:var(--amber);border:1px solid var(--amber-dim);
+    display:inline-block;
+  }
+  .empty-state, .loading-state{padding:36px 18px;color:var(--off-dim);font-size:13px;font-family:'IBM Plex Mono',monospace;text-align:center;}
+  .panel-note{padding:10px 18px;font-size:11px;color:var(--off-dim);border-top:1px solid var(--line);line-height:1.5;}
+  .panel-note b{color:var(--amber);}
+  .table-wrap{overflow-x:auto;}
+
+  /* ---------- Guide ---------- */
+  .guide-grid{display:grid;grid-template-columns:1fr 380px;gap:20px;align-items:start;}
+  @media (max-width:900px){.guide-grid{grid-template-columns:1fr;}}
+  .guide-list{padding:14px 18px;display:flex;flex-direction:column;gap:10px;max-height:640px;overflow-y:auto;}
+  .guide-card{border:1px solid var(--line);border-radius:2px;padding:13px 15px;background:var(--panel-2);}
+  .guide-card-top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;}
+  .guide-card h3{margin:0;font-size:14.5px;font-weight:700;color:var(--off);}
+  .guide-tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;}
+  .tag{font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:var(--teal);text-transform:uppercase;letter-spacing:0.4px;background:var(--teal-dim);padding:2px 6px;border-radius:2px;}
+  .tag.fund{color:var(--amber);background:rgba(255,176,0,0.1);}
+  .guide-card p{margin:9px 0 0;font-size:12.5px;color:var(--off-dim);line-height:1.5;}
+  .guide-card .meta-row{display:flex;justify-content:space-between;align-items:center;margin-top:11px;}
+  .status-select{font-family:'IBM Plex Mono',monospace;font-size:10px;background:var(--ink);color:var(--amber);border:1px solid var(--amber-dim);padding:4px 6px;border-radius:2px;}
+  .del-btn{background:none;border:none;color:var(--off-faint);cursor:pointer;font-size:11px;font-family:'IBM Plex Mono',monospace;}
+  .del-btn:hover{color:var(--red);}
+  .guide-empty{padding:30px 18px;color:var(--off-dim);font-size:13px;font-family:'IBM Plex Mono',monospace;}
+
+  .add-panel{position:sticky;top:16px;}
+  .add-form{padding:16px 18px;display:grid;gap:9px;}
+  .field-label{font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--off-faint);margin-bottom:-3px;}
+  .add-form input, .add-form textarea, .add-form select{
+    background:var(--ink);border:1px solid var(--line);color:var(--off);padding:9px 10px;
+    font-family:'Inter',sans-serif;font-size:12.5px;border-radius:2px;width:100%;
+  }
+  .add-form input:focus, .add-form textarea:focus{outline:none;border-color:var(--teal);}
+  .add-form textarea{resize:vertical;min-height:48px;}
+  .form-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .add-btn{
+    font-family:'IBM Plex Mono',monospace;font-size:11.5px;letter-spacing:1px;text-transform:uppercase;
+    background:var(--amber);color:#1a1300;border:none;padding:11px;border-radius:2px;cursor:pointer;font-weight:700;margin-top:4px;
+  }
+  .add-btn:hover{background:#ffc433;}
+  .util-row{display:flex;gap:8px;padding:0 18px 16px;}
+  .util-btn{
+    flex:1;font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:0.6px;text-transform:uppercase;
+    background:transparent;border:1px solid var(--line);color:var(--off-dim);padding:8px;border-radius:2px;cursor:pointer;
+  }
+  .util-btn:hover{border-color:var(--teal);color:var(--teal);}
+  .funding-note{padding:0 18px 16px;font-size:11px;color:var(--off-dim);line-height:1.5;}
+  .funding-note b{color:var(--amber);}
+
+  footer{text-align:center;padding:22px;color:var(--off-faint);font-family:'IBM Plex Mono',monospace;font-size:10px;border-top:1px solid var(--line);line-height:1.7;}
+  ::-webkit-scrollbar{width:8px;height:8px;}
+  ::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px;}
+</style>
+</head>
+<body>
+
+<div class="ticker-wrap"><div class="ticker mono" id="tickerText">Booting feeds…</div></div>
+
+<header class="hero">
+  <div class="hero-top">
+    <div>
+      <div class="eyebrow">Multi-Source Airdrop Intelligence — 2026</div>
+      <h1>Drop<span class="flap">Board</span></h1>
+      <div class="sub">Live protocol rankings, revenue, and trending signals pulled from DeFiLlama and CoinGecko, side by side with your own farming guide — funding, tasks, and status, saved to this browser.</div>
+    </div>
+    <div class="stat-strip mono" id="statStrip">
+      <div class="stat"><div class="stat-label">Candidates</div><div class="stat-val amber" id="statCandidates">—</div></div>
+      <div class="stat"><div class="stat-label">Tracked TVL</div><div class="stat-val teal" id="statTVL">—</div></div>
+      <div class="stat"><div class="stat-label">My Guide</div><div class="stat-val" id="statGuide">0</div></div>
+    </div>
+  </div>
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="candidates">Candidates <span class="n" id="tabNCandidates"></span></button>
+    <button class="tab-btn" data-tab="rankings">Rankings</button>
+    <button class="tab-btn" data-tab="trending">Trending</button>
+    <button class="tab-btn" data-tab="guide">My Guide <span class="n" id="tabNGuide"></span></button>
+  </nav>
+</header>
+
+<main>
+
+  <!-- ===== CANDIDATES ===== -->
+  <section class="view active" id="view-candidates">
+    <div class="toolbar">
+      <input type="text" id="candSearch" placeholder="Search project or category…">
+      <select class="filter" id="candChainFilter"><option value="">All chains</option></select>
+      <div class="spacer"></div>
+      <span class="src-tag">source: <b>DeFiLlama /protocols</b></span>
+      <button class="refresh-btn mono" id="refreshCandidates">↻ REFRESH</button>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <div class="panel-title"><span class="dot"></span>Tokenless · High TVL</div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th style="width:28px;">#</th>
+            <th data-sort="name">Project</th>
+            <th data-sort="tvl" class="sorted" style="text-align:right;">TVL</th>
+            <th data-sort="change_7d" style="text-align:right;">7D</th>
+            <th data-sort="change_1d" style="text-align:right;">1D</th>
+            <th>Signal</th>
+          </tr></thead>
+          <tbody id="candidatesBody"><tr><td colspan="6" class="loading-state">Fetching…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="panel-note">Protocols with no listed token, ranked by TVL. High TVL + no token is the classic pre-airdrop setup — <b>not confirmation</b> of an airdrop. Always verify on official project channels before farming.</div>
+    </div>
+  </section>
+
+  <!-- ===== RANKINGS ===== -->
+  <section class="view" id="view-rankings">
+    <div class="toolbar">
+      <input type="text" id="rankSearch" placeholder="Search project or category…">
+      <select class="filter" id="rankMode">
+        <option value="tvl">Rank by TVL</option>
+        <option value="revenue">Rank by 24h Revenue</option>
+      </select>
+      <div class="spacer"></div>
+      <span class="src-tag">source: <b>DeFiLlama /protocols</b> + <b>/overview/fees</b></span>
+      <button class="refresh-btn mono" id="refreshRankings">↻ REFRESH</button>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><div class="panel-title"><span class="dot"></span>Protocol Leaderboard</div></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th style="width:28px;">#</th>
+            <th data-sort="name">Project</th>
+            <th data-sort="tvl" style="text-align:right;">TVL</th>
+            <th data-sort="revenue24h" style="text-align:right;">24H Revenue</th>
+            <th data-sort="change_7d" style="text-align:right;">TVL 7D</th>
+            <th>Token</th>
+          </tr></thead>
+          <tbody id="rankingsBody"><tr><td colspan="6" class="loading-state">Fetching…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="panel-note">Revenue = protocol's own cut of fees, not total volume. A protocol with real revenue but still tokenless is a stronger airdrop candidate than TVL alone suggests.</div>
+    </div>
+  </section>
+
+  <!-- ===== TRENDING ===== -->
+  <section class="view" id="view-trending">
+    <div class="toolbar">
+      <div class="spacer"></div>
+      <span class="src-tag">source: <b>CoinGecko /search/trending</b></span>
+      <button class="refresh-btn mono" id="refreshTrending">↻ REFRESH</button>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><div class="panel-title"><span class="dot"></span>Most-Searched Right Now</div></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th style="width:28px;">#</th>
+            <th>Coin</th>
+            <th style="text-align:right;">Mkt Cap Rank</th>
+            <th>Chain</th>
+          </tr></thead>
+          <tbody id="trendingBody"><tr><td colspan="4" class="loading-state">Fetching…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="panel-note">Social search momentum — often front-runs listings and airdrop speculation, but it's noisy. Cross-check against the Candidates and Rankings tabs before acting.</div>
+    </div>
+  </section>
+
+  <!-- ===== MY GUIDE ===== -->
+  <section class="view" id="view-guide">
+    <div class="guide-grid">
+      <div class="panel">
+        <div class="panel-head">
+          <div class="panel-title"><span class="dot"></span>My Farming Guide</div>
+          <span class="mono" style="font-size:10px;color:var(--off-faint);">SAVED LOCALLY IN THIS BROWSER</span>
+        </div>
+        <div id="guideList" class="guide-list">
+          <div class="guide-empty">No entries yet. Add your first target on the right.</div>
+        </div>
+      </div>
+
+      <div class="panel add-panel">
+        <div class="panel-head"><div class="panel-title"><span class="dot"></span>Add Target</div></div>
+        <div class="add-form">
+          <div>
+            <div class="field-label">Project name</div>
+            <input type="text" id="fName" placeholder="e.g. Lighter, Monad">
+          </div>
+          <div class="form-row">
+            <div>
+              <div class="field-label">Chain</div>
+              <input type="text" id="fChain" placeholder="Solana, Arbitrum…">
+            </div>
+            <div>
+              <div class="field-label">Status</div>
+              <select id="fStatus" class="status-select" style="width:100%;padding:9px 10px;">
+                <option value="watching">Watching</option>
+                <option value="farming">Farming</option>
+                <option value="claimable">Claimable</option>
+                <option value="claimed">Claimed</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div>
+              <div class="field-label">Funding raised</div>
+              <input type="text" id="fFunding" placeholder="e.g. $30M Series A">
+            </div>
+            <div>
+              <div class="field-label">Lead investors</div>
+              <input type="text" id="fInvestors" placeholder="e.g. Paradigm, a16z">
+            </div>
+          </div>
+          <div>
+            <div class="field-label">Tasks / notes</div>
+            <textarea id="fNotes" placeholder="Bridge $500, 20 trades/week, hold 30d…"></textarea>
+          </div>
+          <div>
+            <div class="field-label">Link</div>
+            <input type="text" id="fLink" placeholder="https://…">
+          </div>
+          <button class="add-btn" id="addBtn">+ Add to guide</button>
+        </div>
+        <div class="funding-note">Funding data isn't available from any free public API — <b>add it manually</b> from project announcements, RootData, or Crunchbase. Everything else on this panel is saved only in this browser.</div>
+        <div class="util-row">
+          <button class="util-btn" id="exportBtn">Export JSON</button>
+          <button class="util-btn" id="clearBtn">Clear all</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>DROPBOARD · data via DeFiLlama &amp; CoinGecko public APIs, delayed up to ~1hr · not financial advice · verify contracts before signing</footer>
+
+<script>
+/* ---------------- Tabs ---------------- */
+document.querySelectorAll('.tab-btn').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('view-'+btn.dataset.tab).classList.add('active');
+  });
+});
+
+function escapeHtml(str){const d=document.createElement('div');d.textContent=str??'';return d.innerHTML;}
+function fmtUSD(n){
+  if(n===undefined||n===null||isNaN(n)) return '—';
+  if(n>=1e9) return '$'+(n/1e9).toFixed(2)+'b';
+  if(n>=1e6) return '$'+(n/1e6).toFixed(1)+'m';
+  if(n>=1e3) return '$'+(n/1e3).toFixed(0)+'k';
+  return '$'+Math.round(n);
+}
+function chgClass(v){ if(v===undefined||v===null||isNaN(v)) return 'flat'; return v>0.5?'up':(v<-0.5?'down':'flat'); }
+function chgText(v){ if(v===undefined||v===null||isNaN(v)) return '—'; return (v>0?'+':'')+v.toFixed(1)+'%'; }
+
+/* ---------------- Global data caches ---------------- */
+let allProtocols = [];
+let feesByName = {};
+let candidateSort = {key:'tvl', dir:-1};
+let rankingSort = {key:'tvl', dir:-1};
+
+/* ---------------- Candidates tab ---------------- */
+async function loadProtocols(){
+  const body = document.getElementById('candidatesBody');
+  const rbody = document.getElementById('rankingsBody');
+  body.innerHTML = '<tr><td colspan="6" class="loading-state">Fetching…</td></tr>';
+  document.getElementById('refreshCandidates').disabled = true;
+  try{
+    const res = await fetch('https://api.llama.fi/protocols');
+    if(!res.ok) throw new Error('bad response');
+    allProtocols = await res.json();
+    populateChainFilter();
+    renderCandidates();
+    updateTicker();
+    updateStats();
+  }catch(e){
+    body.innerHTML = '<tr><td colspan="6" class="empty-state">Feed unavailable — network blocked or rate limited. Tap refresh to retry.</td></tr>';
+  }finally{
+    document.getElementById('refreshCandidates').disabled = false;
+  }
+  loadRankings(); // depends on allProtocols
+}
+
+function populateChainFilter(){
+  const sel = document.getElementById('candChainFilter');
+  if(sel.options.length > 1) return;
+  const chains = new Set();
+  allProtocols.forEach(p => (p.chains||[]).forEach(c => chains.add(c)));
+  [...chains].sort().slice(0,60).forEach(c=>{
+    const opt = document.createElement('option'); opt.value=c; opt.textContent=c; sel.appendChild(opt);
+  });
+}
+
+function getCandidates(){
+  const q = (document.getElementById('candSearch').value||'').toLowerCase();
+  const chain = document.getElementById('candChainFilter').value;
+  return allProtocols
+    .filter(p => (p.symbol==='-' || !p.symbol) && p.tvl && p.tvl > 2000000 && p.category !== 'Chain')
+    .filter(p => !q || p.name.toLowerCase().includes(q) || (p.category||'').toLowerCase().includes(q))
+    .filter(p => !chain || (p.chains||[]).includes(chain));
+}
+
+function renderCandidates(){
+  const body = document.getElementById('candidatesBody');
+  let list = getCandidates();
+  list.sort((a,b)=>{
+    const {key,dir} = candidateSort;
+    let av=a[key], bv=b[key];
+    if(key==='name'){ av=av||''; bv=bv||''; return dir*av.localeCompare(bv); }
+    av = av||0; bv = bv||0;
+    return dir<0 ? (bv-av) : (av-bv);
+  });
+  document.getElementById('tabNCandidates').textContent = list.length;
+  if(list.length===0){ body.innerHTML = '<tr><td colspan="6" class="empty-state">No matches.</td></tr>'; return; }
+  body.innerHTML = list.slice(0,60).map((p,i)=>`
+    <tr>
+      <td class="rank-badge">${i+1}</td>
+      <td class="name-cell">${escapeHtml(p.name)}<span class="cat">${escapeHtml(p.category||'—')}</span></td>
+      <td class="num">${fmtUSD(p.tvl)}</td>
+      <td class="num ${chgClass(p.change_7d)}">${chgText(p.change_7d)}</td>
+      <td class="num ${chgClass(p.change_1d)}">${chgText(p.change_1d)}</td>
+      <td><span class="status-pill">no token</span></td>
+    </tr>`).join('');
+}
+
+document.getElementById('candSearch').addEventListener('input', renderCandidates);
+document.getElementById('candChainFilter').addEventListener('change', renderCandidates);
+document.getElementById('refreshCandidates').addEventListener('click', loadProtocols);
+document.querySelectorAll('#view-candidates th[data-sort]').forEach(th=>{
+  th.addEventListener('click', ()=>{
+    const key = th.dataset.sort;
+    candidateSort.dir = (candidateSort.key===key) ? -candidateSort.dir : -1;
+    candidateSort.key = key;
+    document.querySelectorAll('#view-candidates th').forEach(t=>t.classList.remove('sorted'));
+    th.classList.add('sorted');
+    renderCandidates();
+  });
+});
+
+/* ---------------- Rankings tab ---------------- */
+async function loadRankings(){
+  const rbody = document.getElementById('rankingsBody');
+  document.getElementById('refreshRankings').disabled = true;
+  try{
+    const res = await fetch('https://api.llama.fi/overview/fees?dataType=dailyRevenue');
+    if(!res.ok) throw new Error('bad response');
+    const data = await res.json();
+    feesByName = {};
+    (data.protocols||[]).forEach(p=>{ feesByName[p.name] = p; });
+    renderRankings();
+  }catch(e){
+    feesByName = {};
+    renderRankings();
+  }finally{
+    document.getElementById('refreshRankings').disabled = false;
+  }
+}
+
+function renderRankings(){
+  const rbody = document.getElementById('rankingsBody');
+  const q = (document.getElementById('rankSearch').value||'').toLowerCase();
+  const mode = document.getElementById('rankMode').value;
+
+  let list = allProtocols
+    .filter(p => p.tvl && p.category !== 'Chain')
+    .filter(p => !q || p.name.toLowerCase().includes(q) || (p.category||'').toLowerCase().includes(q))
+    .map(p => ({...p, revenue24h: feesByName[p.name] ? feesByName[p.name].total24h : undefined }));
+
+  if(mode==='revenue'){
+    list = list.filter(p => p.revenue24h !== undefined);
+  }
+
+  list.sort((a,b)=>{
+    const {dir} = rankingSort;
+    let av=a[rankingSort.key], bv=b[rankingSort.key];
+    if(rankingSort.key==='name'){ av=av||''; bv=bv||''; return dir*av.localeCompare(bv); }
+    av = av||0; bv = bv||0;
+    return dir<0 ? (bv-av) : (av-bv);
+  });
+
+  if(list.length===0){ rbody.innerHTML = '<tr><td colspan="6" class="empty-state">No matches, or revenue feed unavailable.</td></tr>'; return; }
+
+  rbody.innerHTML = list.slice(0,60).map((p,i)=>`
+    <tr>
+      <td class="rank-badge">${i+1}</td>
+      <td class="name-cell">${escapeHtml(p.name)}<span class="cat">${escapeHtml(p.category||'—')}</span></td>
+      <td class="num">${fmtUSD(p.tvl)}</td>
+      <td class="num">${p.revenue24h!==undefined ? fmtUSD(p.revenue24h) : '—'}</td>
+      <td class="num ${chgClass(p.change_7d)}">${chgText(p.change_7d)}</td>
+      <td>${(p.symbol==='-'||!p.symbol) ? '<span class="status-pill">no token</span>' : `<span class="mono" style="color:var(--off-dim);font-size:11px;">${escapeHtml(p.symbol)}</span>`}</td>
+    </tr>`).join('');
+}
+
+document.getElementById('rankSearch').addEventListener('input', renderRankings);
+document.getElementById('rankMode').addEventListener('change', renderRankings);
+document.getElementById('refreshRankings').addEventListener('click', loadRankings);
+document.querySelectorAll('#view-rankings th[data-sort]').forEach(th=>{
+  th.addEventListener('click', ()=>{
+    const key = th.dataset.sort;
+    rankingSort.dir = (rankingSort.key===key) ? -rankingSort.dir : -1;
+    rankingSort.key = key;
+    document.querySelectorAll('#view-rankings th').forEach(t=>t.classList.remove('sorted'));
+    th.classList.add('sorted');
+    renderRankings();
+  });
+});
+
+/* ---------------- Trending tab ---------------- */
+async function loadTrending(){
+  const body = document.getElementById('trendingBody');
+  document.getElementById('refreshTrending').disabled = true;
+  body.innerHTML = '<tr><td colspan="4" class="loading-state">Fetching…</td></tr>';
+  try{
+    const res = await fetch('https://api.coingecko.com/api/v3/search/trending');
+    if(!res.ok) throw new Error('bad response');
+    const data = await res.json();
+    const coins = (data.coins||[]).map(c=>c.item);
+    if(coins.length===0){ body.innerHTML = '<tr><td colspan="4" class="empty-state">No data returned.</td></tr>'; return; }
+    body.innerHTML = coins.map((c,i)=>`
+      <tr>
+        <td class="rank-badge">${i+1}</td>
+        <td class="name-cell">${escapeHtml(c.name)} <span class="mono" style="color:var(--off-dim);font-weight:400;">${escapeHtml((c.symbol||'').toUpperCase())}</span></td>
+        <td class="num">${c.market_cap_rank ? '#'+c.market_cap_rank : '—'}</td>
+        <td class="mono" style="color:var(--off-dim);font-size:11px;">${escapeHtml(c.platforms ? Object.keys(c.platforms||{})[0]||'—' : '—')}</td>
+      </tr>`).join('');
+  }catch(e){
+    body.innerHTML = '<tr><td colspan="4" class="empty-state">Feed unavailable — network blocked or rate limited. Tap refresh to retry.</td></tr>';
+  }finally{
+    document.getElementById('refreshTrending').disabled = false;
+  }
+}
+document.getElementById('refreshTrending').addEventListener('click', loadTrending);
+
+/* ---------------- Ticker & stats ---------------- */
+function updateTicker(){
+  const list = getCandidates().sort((a,b)=>b.tvl-a.tvl).slice(0,14);
+  const tickerText = document.getElementById('tickerText');
+  if(list.length===0){ tickerText.innerHTML = '<span>no candidates loaded</span>'; return; }
+  tickerText.innerHTML = list.map(p => `<span>${escapeHtml(p.name)} <b>${fmtUSD(p.tvl)} TVL</b></span>`).join('')
+    + '<span>feed refreshed just now — DeFiLlama · api.llama.fi</span>';
+}
+function updateStats(){
+  const list = getCandidates();
+  document.getElementById('statCandidates').textContent = list.length;
+  document.getElementById('statTVL').textContent = fmtUSD(list.reduce((s,p)=>s+(p.tvl||0),0));
+}
+
+/* ---------------- My Guide (persisted) ---------------- */
+let guideEntries = [];
+
+async function loadGuide(){
+  try{
+    const result = await window.storage.get('guide-entries-v2', false);
+    guideEntries = result ? JSON.parse(result.value) : [];
+  }catch(e){ guideEntries = []; }
+  renderGuide();
+}
+async function saveGuide(){
+  try{ await window.storage.set('guide-entries-v2', JSON.stringify(guideEntries), false); }
+  catch(e){ console.error('save failed', e); }
+}
+
+function renderGuide(){
+  const guideList = document.getElementById('guideList');
+  document.getElementById('statGuide').textContent = guideEntries.length;
+  document.getElementById('tabNGuide').textContent = guideEntries.length || '';
+  if(guideEntries.length===0){
+    guideList.innerHTML = '<div class="guide-empty">No entries yet. Add your first target on the right.</div>';
+    return;
+  }
+  const order = {farming:0, claimable:1, watching:2, claimed:3};
+  const sorted = [...guideEntries].sort((a,b)=>(order[a.status]??9)-(order[b.status]??9));
+  guideList.innerHTML = sorted.map(e=>`
+    <div class="guide-card">
+      <div class="guide-card-top">
+        <div>
+          <h3>${escapeHtml(e.name)}</h3>
+          <div class="guide-tags">
+            ${e.chain ? `<span class="tag">${escapeHtml(e.chain)}</span>` : ''}
+            ${e.funding ? `<span class="tag fund">${escapeHtml(e.funding)}</span>` : ''}
+          </div>
+        </div>
+        <button class="del-btn" data-del="${e.id}">✕ remove</button>
+      </div>
+      ${e.investors ? `<p><b style="color:var(--off);">Investors:</b> ${escapeHtml(e.investors)}</p>` : ''}
+      ${e.notes ? `<p>${escapeHtml(e.notes)}</p>` : ''}
+      <div class="meta-row">
+        <select class="status-select" data-status="${e.id}">
+          <option value="watching" ${e.status==='watching'?'selected':''}>Watching</option>
+          <option value="farming" ${e.status==='farming'?'selected':''}>Farming</option>
+          <option value="claimable" ${e.status==='claimable'?'selected':''}>Claimable</option>
+          <option value="claimed" ${e.status==='claimed'?'selected':''}>Claimed</option>
+        </select>
+        ${e.link ? `<a href="${escapeHtml(e.link)}" target="_blank" rel="noopener" class="mono" style="font-size:10px;color:var(--teal);">open link ↗</a>` : '<span></span>'}
+      </div>
+    </div>`).join('');
+
+  guideList.querySelectorAll('[data-del]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      guideEntries = guideEntries.filter(e=>e.id!==btn.dataset.del);
+      saveGuide(); renderGuide();
+    });
+  });
+  guideList.querySelectorAll('[data-status]').forEach(sel=>{
+    sel.addEventListener('change', ()=>{
+      const entry = guideEntries.find(e=>e.id===sel.dataset.status);
+      if(entry){ entry.status = sel.value; saveGuide(); renderGuide(); }
+    });
+  });
+}
+
+document.getElementById('addBtn').addEventListener('click', ()=>{
+  const name = document.getElementById('fName').value.trim();
+  if(!name){ document.getElementById('fName').focus(); return; }
+  guideEntries.push({
+    id: Date.now().toString(36)+Math.random().toString(36).slice(2,6),
+    name,
+    chain: document.getElementById('fChain').value.trim(),
+    status: document.getElementById('fStatus').value,
+    funding: document.getElementById('fFunding').value.trim(),
+    investors: document.getElementById('fInvestors').value.trim(),
+    notes: document.getElementById('fNotes').value.trim(),
+    link: document.getElementById('fLink').value.trim(),
+  });
+  saveGuide(); renderGuide();
+  ['fName','fChain','fFunding','fInvestors','fNotes','fLink'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('fStatus').value='watching';
+});
+
+document.getElementById('exportBtn').addEventListener('click', ()=>{
+  const blob = new Blob([JSON.stringify(guideEntries, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'dropboard-guide.json'; a.click();
+  URL.revokeObjectURL(url);
+});
+document.getElementById('clearBtn').addEventListener('click', ()=>{
+  if(confirm('Remove all guide entries? This cannot be undone.')){
+    guideEntries = []; saveGuide(); renderGuide();
+  }
+});
+
+/* ---------------- Init ---------------- */
+loadProtocols();
+loadTrending();
+loadGuide();
+setInterval(()=>{ loadProtocols(); loadTrending(); }, 5*60*1000);
+</script>
+</body>
+</html>
