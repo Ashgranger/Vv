@@ -73,8 +73,6 @@ class Config:
     burst_fills: int
     burst_window_s: float
     burst_cooldown_s: float
-    sweep_guard_fills: int
-    sweep_guard_window_s: float
     markout_horizon_s: float
     markout_window: int
 
@@ -90,8 +88,6 @@ class Config:
     regime_vol_threshold_bps: Decimal
     regime_flow_threshold: Decimal
     regime_toxic_threshold_bps: Decimal
-    regime_toxic_spread_mult: Decimal
-    ev_hysteresis_bps: Decimal
 
     # --- risk -------------------------------------------------------------- #
     session_max_loss_usd: Decimal
@@ -155,8 +151,6 @@ class Config:
             burst_fills=int(_e("BURST_FILLS", 3)),
             burst_window_s=float(_e("BURST_WINDOW_S", 15)),
             burst_cooldown_s=float(_e("BURST_COOLDOWN_S", 20)),
-            sweep_guard_fills=int(_e("SWEEP_GUARD_FILLS", 2)),
-            sweep_guard_window_s=float(_e("SWEEP_GUARD_WINDOW_S", 1.0)),
             markout_horizon_s=float(_e("MARKOUT_HORIZON_S", 5)),
             markout_window=int(_e("MARKOUT_WINDOW", 10)),
             min_ev_bps=_d("MIN_EV_BPS", "0.2"),
@@ -170,8 +164,6 @@ class Config:
             regime_vol_threshold_bps=_d("REGIME_VOL_THRESHOLD_BPS", "5.0"),
             regime_flow_threshold=_d("REGIME_FLOW_THRESHOLD", "0.35"),
             regime_toxic_threshold_bps=_d("REGIME_TOXIC_THRESHOLD_BPS", "1.5"),
-            regime_toxic_spread_mult=_d("REGIME_TOXIC_SPREAD_MULT", "1.5"),
-            ev_hysteresis_bps=_d("EV_HYSTERESIS_BPS", "0.1"),
             session_max_loss_usd=_d("SESSION_MAX_LOSS_USD", "0.35"),
             halt_exit=_b("HALT_EXIT", "1"),
             requote_bps=_d("REQUOTE_BPS", "1"),
