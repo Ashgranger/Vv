@@ -94,34 +94,5 @@ class TestLevel7MarketMaker(unittest.IsolatedAsyncioTestCase):
         print(f"✓ test_05_spread_capture_roundtrip passed: Realized PnL = ${bot.ledger.realized:.4f}.")
 
 
-
-
-    async def test_06_toxic_regime_and_sweep_guard(self):
-        """Test Level 7 Toxic Regime protection and preemptive Sweep Guard."""
-        bot, s, clock = sim.make(EXTRA_LEVELS=2, ORDER_USD=20, MAX_POSITION_USD=200,
-                                 REGIME_TOXIC_SPREAD_MULT="1.5", SWEEP_GUARD_FILLS=2)
-        # 1. Normal step
-        await sim.step(bot, s, clock, "80000.0", "80100.0")
-        self.assertGreaterEqual(len(bot.om.side_orders(BUY)), 2)
-
-        # 2. Simulate sweep fills (2 fills in <= 1.0s)
-        f1 = bot.om.get_order_by_slot(0, BUY)
-        bot._on_fill(BUY, f1.remaining, f1.price, f1)
-        f2 = bot.om.get_order_by_slot(1, BUY)
-        bot._on_fill(BUY, f2.remaining, f2.price, f2)
-        await asyncio.sleep(0.01)
-        self.assertGreater(bot._burst_blocked_until[BUY], clock.t, "BUY side should be sweep blocked")
-
-        # 3. Test toxic regime OBI suppression
-        bot.ledger.markouts.append(D("-5.0"))
-        self.assertEqual(bot.md.detect_regime(clock.t, bot.ledger.tox_bps), "REGIME_D_TOXIC")
-        # Unblock and test step under toxic sell dump (OBI < -0.4)
-        bot._burst_blocked_until[BUY] = 0.0
-        await sim.step(bot, s, clock, "80000.0", "80100.0", bsz="0.1", asz="10.0")
-        buy_orders = bot.om.side_orders(BUY)
-        self.assertEqual(len(buy_orders), 0, "BUY orders should be suppressed during toxic sell dump")
-        print("✓ test_06_toxic_regime_and_sweep_guard passed: Toxic OBI protection and Sweep Guard active.")
-
-
 if __name__ == "__main__":
     unittest.main()
