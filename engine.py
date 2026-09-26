@@ -27,7 +27,7 @@ class MarketMakingEngine:
     def __init__(self, cfg: Config):
         self.cfg = cfg
 
-    def compute_fair_value(self, md: MarketData, now: float) -> Decimal:
+    def compute_fair_value(self, md: MarketData, now: float, ledger: Optional[Ledger] = None) -> Decimal:
         base_mid = md.mid
         if base_mid is None:
             return ZERO
@@ -38,18 +38,23 @@ class MarketMakingEngine:
         micro = md.micro if md.micro else base_mid
         half_spr = (md.ask - md.bid) / Decimal("2") if (md.bid and md.ask) else ZERO
 
+        l = ledger.learner if (ledger and hasattr(ledger, "learner") and self.cfg.enable_online_learning) else None
+        alpha = l.obi_alpha if l else self.cfg.obi_alpha
+        beta = l.tfi_beta if l else self.cfg.tfi_beta
+
         obi = md.obi
-        obi_shift = half_spr * obi * self.cfg.obi_alpha
+        obi_shift = half_spr * obi * alpha
 
         tfi = md.trade_flow_imbalance(10.0, now)
-        tfi_shift = half_spr * tfi * self.cfg.tfi_beta
+        tfi_shift = half_spr * tfi * beta
 
         fair_val = micro + obi_shift + tfi_shift
         return fair_val
 
-    def fill_probability(self, distance_bps: Decimal) -> float:
+    def fill_probability(self, distance_bps: Decimal, ledger: Optional[Ledger] = None) -> float:
         d = float(max(ZERO, distance_bps))
-        kappa = float(self.cfg.fill_prob_kappa)
+        l = ledger.learner if (ledger and hasattr(ledger, "learner") and self.cfg.enable_online_learning) else None
+        kappa = float(l.fill_prob_kappa if l else self.cfg.fill_prob_kappa)
         return math.exp(-kappa * d)
 
     def expected_adverse_move(self, side: str, md: MarketData, ledger: Ledger, now: float) -> Decimal:
@@ -73,16 +78,19 @@ class MarketMakingEngine:
         return total_adverse
 
     def compute_reservation_price(self, fair_value: Decimal, position_usd: Decimal,
-                                  vol_bps: Decimal) -> Decimal:
+                                  vol_bps: Decimal, ledger: Optional[Ledger] = None) -> Decimal:
         if self.cfg.max_position_usd <= 0:
             return fair_value
         q = clamp(position_usd / self.cfg.max_position_usd, Decimal("-1"), Decimal("1"))
         
         q_eff = Decimal(str(math.copysign(math.pow(abs(float(q)), 1.3), float(q))))
-        inv_skew_bps = q_eff * self.cfg.skew_bps
-        
+        l = ledger.learner if (ledger and hasattr(ledger, "learner") and self.cfg.enable_online_learning) else None
+        skew_rate = l.skew_bps if l else self.cfg.skew_bps
+        gamma_rate = l.gamma_risk_aversion if l else self.cfg.gamma_risk_aversion
+
+        inv_skew_bps = q_eff * skew_rate
         if vol_bps > 0:
-            inv_skew_bps += q_eff * vol_bps * self.cfg.gamma_risk_aversion
+            inv_skew_bps += q_eff * vol_bps * gamma_rate
 
         res_price = fair_value * (ONE - inv_skew_bps / BPS)
         return res_price
@@ -94,7 +102,8 @@ class MarketMakingEngine:
         ledger: Ledger,
         now: float,
         buy_blocked: bool,
-        sell_blocked: bool
+        sell_blocked: bool,
+        existing_slots: Optional[set] = None
     ) -> List[QuoteTarget]:
         if not md.bid or not md.ask or md.bid >= md.ask or not md.mid:
             return []
@@ -102,16 +111,29 @@ class MarketMakingEngine:
         mid = md.mid
         tick = m.tick_for(mid)
         step = m.step
-        fair_val = self.compute_fair_value(md, now)
+        l = ledger.learner if (ledger and hasattr(ledger, "learner") and self.cfg.enable_online_learning) else None
+        min_edge = l.min_edge_bps if l else self.cfg.min_edge_bps
+        max_edge = l.max_edge_bps if l else self.cfg.max_edge_bps
+        vol_k = l.vol_k if l else self.cfg.vol_k
+        tox_mult = l.tox_mult if l else self.cfg.tox_mult
+        tox_spread_mult = l.regime_toxic_spread_mult if l else self.cfg.regime_toxic_spread_mult
+        spacing = l.level_spacing_bps if l else self.cfg.level_spacing_bps
+        size_mult_base = l.level_size_mult if l else self.cfg.level_size_mult
+        min_ev_base = l.min_ev_bps if l else self.cfg.min_ev_bps
+
+        fair_val = self.compute_fair_value(md, now, ledger=ledger)
         pos_usd = ledger.position * mid
-        res_price = self.compute_reservation_price(fair_val, pos_usd, md.vol_bps)
+        res_price = self.compute_reservation_price(fair_val, pos_usd, md.vol_bps, ledger=ledger)
 
         regime = md.detect_regime(now, ledger.tox_bps)
+        is_toxic = (regime == "REGIME_D_TOXIC")
         
-        base_edge_bps = self.cfg.min_edge_bps + self.cfg.vol_k * md.vol_bps
+        base_edge_bps = min_edge + vol_k * md.vol_bps
         if self.cfg.enable_online_learning:
-            base_edge_bps += self.cfg.tox_mult * ledger.tox_bps
-        base_edge_bps = clamp(base_edge_bps, self.cfg.min_edge_bps, self.cfg.max_edge_bps)
+            base_edge_bps += tox_mult * ledger.tox_bps
+        if is_toxic:
+            base_edge_bps = base_edge_bps * tox_spread_mult
+        base_edge_bps = clamp(base_edge_bps, min_edge, max_edge)
 
         quotes: List[QuoteTarget] = []
         is_stressed = (pos_usd != 0 and (
@@ -125,23 +147,35 @@ class MarketMakingEngine:
         remaining_sell_usd = max(ZERO, self.cfg.max_position_usd + pos_usd)
 
         for k in range(total_levels):
-            k_spacing = Decimal(str(k)) * self.cfg.level_spacing_bps
+            k_spacing = Decimal(str(k)) * spacing
+            if is_toxic:
+                k_spacing = k_spacing * Decimal("2.0")
             level_edge = base_edge_bps + k_spacing
             
-            size_mult = Decimal(str(math.pow(float(self.cfg.level_size_mult), k)))
+            size_mult = Decimal(str(math.pow(float(size_mult_base), k)))
             level_usd = max(self.cfg.order_usd * size_mult, m.min_notional)
 
             # --- BUY SIDE --- #
             is_unwind_buy = (pos_usd < 0)
             if is_unwind_buy:
-                # UNWIND SHORT: Always active at touch to exit position and capture spread
+                # UNWIND SHORT: Exit short with minimum profit target unless stressed
                 if k == 0:
-                    if self.cfg.penny and (md.ask - md.bid) > Decimal("2") * tick:
-                        cand_px = md.bid + tick
-                    else:
+                    min_profit_bps = max(self.cfg.exit_min_profit_bps, Decimal("1.0"))
+                    min_profit_px = ledger.avg_cost * (ONE - min_profit_bps / BPS) if ledger.avg_cost > ZERO else md.bid
+
+                    if is_stressed:
                         cand_px = md.bid
+                        if self.cfg.penny and (md.ask - md.bid) > Decimal("2") * tick:
+                            cand_px = md.bid + tick
+                    else:
+                        cand_px = min(md.bid, min_profit_px)
+                        if self.cfg.penny and (md.ask - md.bid) > Decimal("2") * tick and (md.bid + tick) <= min_profit_px:
+                            cand_px = md.bid + tick
+
                     cand_px = min(cand_px, md.ask - tick)
                     cand_px = q_down(cand_px, tick)
+                    if md.ask and cand_px >= md.ask:
+                        cand_px = md.ask - tick
                     qty = q_down(abs(ledger.position), step)
                     if cand_px > ZERO and qty >= m.min_size:
                         quotes.append(QuoteTarget(
@@ -151,7 +185,9 @@ class MarketMakingEngine:
                         ))
             else:
                 # ADDING LONG: Quote as long as inventory has room and side is not blocked
-                can_add = (not buy_blocked) and (remaining_buy_usd >= level_usd)
+                severe_sell_pressure = (is_toxic and md.obi < Decimal("-0.4"))
+                toxic_extra_level = (is_toxic and k > 0)
+                can_add = (not buy_blocked) and (not severe_sell_pressure) and (not toxic_extra_level) and (remaining_buy_usd >= level_usd)
                 if can_add:
                     if k == 0 and self.cfg.penny and (md.ask - md.bid) > Decimal("2") * tick:
                         cand_px = md.bid + tick
@@ -160,6 +196,8 @@ class MarketMakingEngine:
                     
                     cand_px = min(cand_px, md.ask - tick)
                     cand_px = q_down(cand_px, tick)
+                    if md.ask and cand_px >= md.ask:
+                        cand_px = md.ask - tick
                     
                     if cand_px > ZERO:
                         qty = q_down(level_usd / cand_px, step)
@@ -167,13 +205,16 @@ class MarketMakingEngine:
                             capture_bps = (fair_val - cand_px) / fair_val * BPS
                             adv_bps = self.expected_adverse_move(BUY, md, ledger, now)
                             dist_bps = (md.ask - cand_px) / mid * BPS
-                            p_fill = self.fill_probability(dist_bps)
+                            p_fill = self.fill_probability(dist_bps, ledger=ledger)
                             fee_bps = self.cfg.maker_fee_bps
-                            inv_cost_bps = max(ZERO, pos_usd / self.cfg.max_position_usd) * self.cfg.skew_bps
+                            skew_rate = l.skew_bps if l else self.cfg.skew_bps
+                            inv_cost_bps = max(ZERO, pos_usd / self.cfg.max_position_usd) * skew_rate
                             
                             ev_bps = Decimal(str(p_fill)) * (capture_bps - adv_bps) - fee_bps - inv_cost_bps
                             
-                            if (not self.cfg.enable_adaptive_ev) or (ev_bps >= self.cfg.min_ev_bps):
+                            min_ev = max(ZERO, min_ev_base - Decimal("0.5")) if (existing_slots and (k, BUY) in existing_slots) else min_ev_base
+
+                            if (not self.cfg.enable_adaptive_ev) or (ev_bps >= min_ev):
                                 quotes.append(QuoteTarget(
                                     pair_index=k, side=BUY, price=cand_px, qty=qty,
                                     expected_value_bps=ev_bps, fill_probability=p_fill,
@@ -184,14 +225,24 @@ class MarketMakingEngine:
             # --- SELL SIDE --- #
             is_unwind_sell = (pos_usd > 0)
             if is_unwind_sell:
-                # UNWIND LONG: Always active at touch to exit position and capture spread
+                # UNWIND LONG: Exit long with minimum profit target unless stressed
                 if k == 0:
-                    if self.cfg.penny and (md.ask - md.bid) > Decimal("2") * tick:
-                        cand_px = md.ask - tick
-                    else:
+                    min_profit_bps = max(self.cfg.exit_min_profit_bps, Decimal("1.0"))
+                    min_profit_px = ledger.avg_cost * (ONE + min_profit_bps / BPS) if ledger.avg_cost > ZERO else md.ask
+
+                    if is_stressed:
                         cand_px = md.ask
+                        if self.cfg.penny and (md.ask - md.bid) > Decimal("2") * tick:
+                            cand_px = md.ask - tick
+                    else:
+                        cand_px = max(md.ask, min_profit_px)
+                        if self.cfg.penny and (md.ask - md.bid) > Decimal("2") * tick and (md.ask - tick) >= min_profit_px:
+                            cand_px = md.ask - tick
+
                     cand_px = max(cand_px, md.bid + tick)
                     cand_px = q_up(cand_px, tick)
+                    if md.bid and cand_px <= md.bid:
+                        cand_px = md.bid + tick
                     qty = q_down(abs(ledger.position), step)
                     if cand_px > ZERO and qty >= m.min_size:
                         quotes.append(QuoteTarget(
@@ -201,7 +252,9 @@ class MarketMakingEngine:
                         ))
             else:
                 # ADDING SHORT: Quote as long as inventory has room and side is not blocked
-                can_add = (not sell_blocked) and (remaining_sell_usd >= level_usd)
+                severe_buy_pressure = (is_toxic and md.obi > Decimal("0.4"))
+                toxic_extra_level = (is_toxic and k > 0)
+                can_add = (not sell_blocked) and (not severe_buy_pressure) and (not toxic_extra_level) and (remaining_sell_usd >= level_usd)
                 if can_add:
                     if k == 0 and self.cfg.penny and (md.ask - md.bid) > Decimal("2") * tick:
                         cand_px = md.ask - tick
@@ -210,6 +263,8 @@ class MarketMakingEngine:
                     
                     cand_px = max(cand_px, md.bid + tick)
                     cand_px = q_up(cand_px, tick)
+                    if md.bid and cand_px <= md.bid:
+                        cand_px = md.bid + tick
                     
                     if cand_px > ZERO:
                         qty = q_down(level_usd / cand_px, step)
@@ -217,13 +272,16 @@ class MarketMakingEngine:
                             capture_bps = (cand_px - fair_val) / fair_val * BPS
                             adv_bps = self.expected_adverse_move(SELL, md, ledger, now)
                             dist_bps = (cand_px - md.bid) / mid * BPS
-                            p_fill = self.fill_probability(dist_bps)
+                            p_fill = self.fill_probability(dist_bps, ledger=ledger)
                             fee_bps = self.cfg.maker_fee_bps
-                            inv_cost_bps = max(ZERO, -pos_usd / self.cfg.max_position_usd) * self.cfg.skew_bps
+                            skew_rate = l.skew_bps if l else self.cfg.skew_bps
+                            inv_cost_bps = max(ZERO, -pos_usd / self.cfg.max_position_usd) * skew_rate
                             
                             ev_bps = Decimal(str(p_fill)) * (capture_bps - adv_bps) - fee_bps - inv_cost_bps
                             
-                            if (not self.cfg.enable_adaptive_ev) or (ev_bps >= self.cfg.min_ev_bps):
+                            min_ev = max(ZERO, min_ev_base - Decimal("0.5")) if (existing_slots and (k, SELL) in existing_slots) else min_ev_base
+
+                            if (not self.cfg.enable_adaptive_ev) or (ev_bps >= min_ev):
                                 quotes.append(QuoteTarget(
                                     pair_index=k, side=SELL, price=cand_px, qty=qty,
                                     expected_value_bps=ev_bps, fill_probability=p_fill,

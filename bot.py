@@ -152,6 +152,14 @@ class MarketMaker:
             self._burst_blocked_until[side] = now + self.cfg.burst_cooldown_s
             log.warning("BURST GUARD: %d %s fills in %.1fs -> pulling %s for %.1fs",
                         same_side, side, self.cfg.burst_window_s, side, self.cfg.burst_cooldown_s)
+            asyncio.create_task(self.om.cancel_side(side, now))
+
+        rapid_fills = sum(1 for t, s in self._recent_fills if s == side and (now - t) <= self.cfg.sweep_guard_window_s)
+        if rapid_fills >= self.cfg.sweep_guard_fills:
+            self._burst_blocked_until[side] = max(self._burst_blocked_until[side], now + self.cfg.burst_cooldown_s)
+            log.warning("SWEEP GUARD: %d %s fills in <=%.1fs -> emergency cancel %s",
+                        rapid_fills, side, self.cfg.sweep_guard_window_s, side)
+            asyncio.create_task(self.om.cancel_side(side, now))
 
         self._journal(fill)
         self._dirty_evt.set()
@@ -218,6 +226,11 @@ class MarketMaker:
                 sell_blocked = True
 
             pos_usd = self.ledger.position * mid
+            if self.cfg.enable_online_learning and self.md.mid:
+                ret_5s = self.md.ret_bps(5.0, now)
+                tfi = self.md.trade_flow_imbalance(10.0, now)
+                self.ledger.learner.on_flow_correlation(self.md.obi, tfi, ret_5s)
+
             if self.md.move_bps(self.cfg.vol_window_s, now) >= self.cfg.vol_pause_bps:
                 # Volatility spike: pause ADDING sides, never pause UNWIND sides
                 if pos_usd >= 0:
@@ -225,11 +238,17 @@ class MarketMaker:
                 if pos_usd <= 0:
                     sell_blocked = True
 
+            existing_slots = set(self.om.pair_slots.keys())
             targets = self.engine.generate_ladder_quotes(
-                m, self.md, self.ledger, now, buy_blocked, sell_blocked
+                m, self.md, self.ledger, now, buy_blocked, sell_blocked, existing_slots=existing_slots
             )
 
-            await self.om.sync_quotes(targets, now)
+            blocked_sides = set()
+            if buy_blocked:
+                blocked_sides.add(BUY)
+            if sell_blocked:
+                blocked_sides.add(SELL)
+            await self.om.sync_quotes(targets, now, blocked_sides=blocked_sides)
 
     async def _heartbeat(self, now: float) -> None:
         if now - self._last_heartbeat < self.cfg.heartbeat_s:
@@ -265,6 +284,15 @@ class MarketMaker:
                  regime, fmt(mid), fmt(self.md.spread_bps), fmt(self.md.obi), fmt(self.md.vol_bps),
                  fmt(self.ledger.position), fmt(self.ledger.unrealized(mid)),
                  fmt(self.ledger.total_pnl(mid)), self.om.describe(now))
+        if self.cfg.enable_online_learning:
+            s = self.ledger.learner.get_summary()
+            p = s["params"]
+            log.info("LEARN [updates=%d tox=%d] | edge=%.2f-%.2fbps skew=%.2fbps spacing=%.2fbps mult=%.2f vol_k=%.2f tox_mult=%.2f min_ev=%.2fbps obi_a=%.2f tfi_b=%.2f kappa=%.2f",
+                     s["total_updates"], s["toxic_fills"],
+                     float(p["min_edge_bps"]), float(p["max_edge_bps"]), float(p["skew_bps"]),
+                     float(p["level_spacing_bps"]), float(p["level_size_mult"]), float(p["vol_k"]),
+                     float(p["tox_mult"]), float(p["min_ev_bps"]), float(p["obi_alpha"]),
+                     float(p["tfi_beta"]), float(p["fill_prob_kappa"]))
 
     async def run(self) -> None:
         log.info("Connecting to %s Arcus WS (%s)...", self.cfg.env_name, self.ex.ws_url)
@@ -312,5 +340,8 @@ class MarketMaker:
                     pass
 
             log.info("Stopping bot - cancelling all resting orders...")
+            if self.cfg.enable_online_learning:
+                self.ledger.learner.save()
+                log.info("Saved online learning state to %s", self.cfg.learning_state_path)
             await self.om.cancel_all()
             reader_task.cancel()

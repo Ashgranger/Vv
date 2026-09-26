@@ -166,6 +166,13 @@ class OrderManager:
             if self.pair_slots.get(slot) == order_id:
                 self.pair_slots.pop(slot, None)
 
+    async def cancel_side(self, side: str, now: float) -> None:
+        for slot, oid in list(self.pair_slots.items()):
+            if slot[1] == side:
+                o = self.orders.get(oid)
+                if o:
+                    await self.cancel(o, now)
+
     async def cancel_all(self) -> None:
         m = self.get_market()
         body = {"address": self.cfg.address, "accountIndex": self.cfg.account_index, "marketId": m.market_id}
@@ -175,7 +182,7 @@ class OrderManager:
         self.pair_slots.clear()
         self.maybe_orders = False
 
-    async def sync_quotes(self, targets: list, now: float) -> None:
+    async def sync_quotes(self, targets: list, now: float, blocked_sides: Optional[set] = None) -> None:
         active_slots = set()
         
         for t in targets:

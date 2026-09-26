@@ -34,6 +34,7 @@ def mkcfg(**env):
         "ARCUS_API_SIGNING_KEY": "11" * 32,
         "DRY_RUN": "0",
         "JOURNAL_PATH": os.devnull,
+        "LEARNING_STATE_PATH": os.devnull,
         "MAX_ACTIONS_PER_MIN": "100000",
         "MIN_REQUOTE_S": "0.5",
         "EXTRA_LEVELS": "1",
