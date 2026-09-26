@@ -152,6 +152,14 @@ class MarketMaker:
             self._burst_blocked_until[side] = now + self.cfg.burst_cooldown_s
             log.warning("BURST GUARD: %d %s fills in %.1fs -> pulling %s for %.1fs",
                         same_side, side, self.cfg.burst_window_s, side, self.cfg.burst_cooldown_s)
+            asyncio.create_task(self.om.cancel_side(side, now))
+
+        rapid_fills = sum(1 for t, s in self._recent_fills if s == side and (now - t) <= self.cfg.sweep_guard_window_s)
+        if rapid_fills >= self.cfg.sweep_guard_fills:
+            self._burst_blocked_until[side] = max(self._burst_blocked_until[side], now + self.cfg.burst_cooldown_s)
+            log.warning("SWEEP GUARD: %d %s fills in <=%.1fs -> emergency cancel %s",
+                        rapid_fills, side, self.cfg.sweep_guard_window_s, side)
+            asyncio.create_task(self.om.cancel_side(side, now))
 
         self._journal(fill)
         self._dirty_evt.set()
@@ -225,8 +233,9 @@ class MarketMaker:
                 if pos_usd <= 0:
                     sell_blocked = True
 
+            existing_slots = set(self.om.pair_slots.keys())
             targets = self.engine.generate_ladder_quotes(
-                m, self.md, self.ledger, now, buy_blocked, sell_blocked
+                m, self.md, self.ledger, now, buy_blocked, sell_blocked, existing_slots=existing_slots
             )
 
             await self.om.sync_quotes(targets, now)

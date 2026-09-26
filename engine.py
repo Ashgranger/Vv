@@ -94,7 +94,8 @@ class MarketMakingEngine:
         ledger: Ledger,
         now: float,
         buy_blocked: bool,
-        sell_blocked: bool
+        sell_blocked: bool,
+        existing_slots: Optional[set] = None
     ) -> List[QuoteTarget]:
         if not md.bid or not md.ask or md.bid >= md.ask or not md.mid:
             return []
@@ -107,10 +108,13 @@ class MarketMakingEngine:
         res_price = self.compute_reservation_price(fair_val, pos_usd, md.vol_bps)
 
         regime = md.detect_regime(now, ledger.tox_bps)
+        is_toxic = (regime == "REGIME_D_TOXIC")
         
         base_edge_bps = self.cfg.min_edge_bps + self.cfg.vol_k * md.vol_bps
         if self.cfg.enable_online_learning:
             base_edge_bps += self.cfg.tox_mult * ledger.tox_bps
+        if is_toxic:
+            base_edge_bps = base_edge_bps * self.cfg.regime_toxic_spread_mult
         base_edge_bps = clamp(base_edge_bps, self.cfg.min_edge_bps, self.cfg.max_edge_bps)
 
         quotes: List[QuoteTarget] = []
@@ -126,6 +130,8 @@ class MarketMakingEngine:
 
         for k in range(total_levels):
             k_spacing = Decimal(str(k)) * self.cfg.level_spacing_bps
+            if is_toxic:
+                k_spacing = k_spacing * Decimal("2.0")
             level_edge = base_edge_bps + k_spacing
             
             size_mult = Decimal(str(math.pow(float(self.cfg.level_size_mult), k)))
@@ -142,6 +148,8 @@ class MarketMakingEngine:
                         cand_px = md.bid
                     cand_px = min(cand_px, md.ask - tick)
                     cand_px = q_down(cand_px, tick)
+                    if md.ask and cand_px >= md.ask:
+                        cand_px = md.ask - tick
                     qty = q_down(abs(ledger.position), step)
                     if cand_px > ZERO and qty >= m.min_size:
                         quotes.append(QuoteTarget(
@@ -151,7 +159,9 @@ class MarketMakingEngine:
                         ))
             else:
                 # ADDING LONG: Quote as long as inventory has room and side is not blocked
-                can_add = (not buy_blocked) and (remaining_buy_usd >= level_usd)
+                severe_sell_pressure = (is_toxic and md.obi < Decimal("-0.4"))
+                toxic_extra_level = (is_toxic and k > 0)
+                can_add = (not buy_blocked) and (not severe_sell_pressure) and (not toxic_extra_level) and (remaining_buy_usd >= level_usd)
                 if can_add:
                     if k == 0 and self.cfg.penny and (md.ask - md.bid) > Decimal("2") * tick:
                         cand_px = md.bid + tick
@@ -160,6 +170,8 @@ class MarketMakingEngine:
                     
                     cand_px = min(cand_px, md.ask - tick)
                     cand_px = q_down(cand_px, tick)
+                    if md.ask and cand_px >= md.ask:
+                        cand_px = md.ask - tick
                     
                     if cand_px > ZERO:
                         qty = q_down(level_usd / cand_px, step)
@@ -173,7 +185,11 @@ class MarketMakingEngine:
                             
                             ev_bps = Decimal(str(p_fill)) * (capture_bps - adv_bps) - fee_bps - inv_cost_bps
                             
-                            if (not self.cfg.enable_adaptive_ev) or (ev_bps >= self.cfg.min_ev_bps):
+                            min_ev = self.cfg.min_ev_bps
+                            if existing_slots and (k, BUY) in existing_slots:
+                                min_ev = min_ev - self.cfg.ev_hysteresis_bps
+
+                            if (not self.cfg.enable_adaptive_ev) or (ev_bps >= min_ev):
                                 quotes.append(QuoteTarget(
                                     pair_index=k, side=BUY, price=cand_px, qty=qty,
                                     expected_value_bps=ev_bps, fill_probability=p_fill,
@@ -192,6 +208,8 @@ class MarketMakingEngine:
                         cand_px = md.ask
                     cand_px = max(cand_px, md.bid + tick)
                     cand_px = q_up(cand_px, tick)
+                    if md.bid and cand_px <= md.bid:
+                        cand_px = md.bid + tick
                     qty = q_down(abs(ledger.position), step)
                     if cand_px > ZERO and qty >= m.min_size:
                         quotes.append(QuoteTarget(
@@ -201,7 +219,9 @@ class MarketMakingEngine:
                         ))
             else:
                 # ADDING SHORT: Quote as long as inventory has room and side is not blocked
-                can_add = (not sell_blocked) and (remaining_sell_usd >= level_usd)
+                severe_buy_pressure = (is_toxic and md.obi > Decimal("0.4"))
+                toxic_extra_level = (is_toxic and k > 0)
+                can_add = (not sell_blocked) and (not severe_buy_pressure) and (not toxic_extra_level) and (remaining_sell_usd >= level_usd)
                 if can_add:
                     if k == 0 and self.cfg.penny and (md.ask - md.bid) > Decimal("2") * tick:
                         cand_px = md.ask - tick
@@ -210,6 +230,8 @@ class MarketMakingEngine:
                     
                     cand_px = max(cand_px, md.bid + tick)
                     cand_px = q_up(cand_px, tick)
+                    if md.bid and cand_px <= md.bid:
+                        cand_px = md.bid + tick
                     
                     if cand_px > ZERO:
                         qty = q_down(level_usd / cand_px, step)
@@ -223,7 +245,11 @@ class MarketMakingEngine:
                             
                             ev_bps = Decimal(str(p_fill)) * (capture_bps - adv_bps) - fee_bps - inv_cost_bps
                             
-                            if (not self.cfg.enable_adaptive_ev) or (ev_bps >= self.cfg.min_ev_bps):
+                            min_ev = self.cfg.min_ev_bps
+                            if existing_slots and (k, SELL) in existing_slots:
+                                min_ev = min_ev - self.cfg.ev_hysteresis_bps
+
+                            if (not self.cfg.enable_adaptive_ev) or (ev_bps >= min_ev):
                                 quotes.append(QuoteTarget(
                                     pair_index=k, side=SELL, price=cand_px, qty=qty,
                                     expected_value_bps=ev_bps, fill_probability=p_fill,

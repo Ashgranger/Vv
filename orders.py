@@ -166,6 +166,13 @@ class OrderManager:
             if self.pair_slots.get(slot) == order_id:
                 self.pair_slots.pop(slot, None)
 
+    async def cancel_side(self, side: str, now: float) -> None:
+        for slot, oid in list(self.pair_slots.items()):
+            if slot[1] == side:
+                o = self.orders.get(oid)
+                if o:
+                    await self.cancel(o, now)
+
     async def cancel_all(self) -> None:
         m = self.get_market()
         body = {"address": self.cfg.address, "accountIndex": self.cfg.account_index, "marketId": m.market_id}
