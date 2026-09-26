@@ -217,8 +217,13 @@ class MarketMaker:
                 self._trend_blocked_until[SELL] = now + self.cfg.trend_hold_s
                 sell_blocked = True
 
+            pos_usd = self.ledger.position * mid
             if self.md.move_bps(self.cfg.vol_window_s, now) >= self.cfg.vol_pause_bps:
-                buy_blocked = sell_blocked = True
+                # Volatility spike: pause ADDING sides, never pause UNWIND sides
+                if pos_usd >= 0:
+                    buy_blocked = True
+                if pos_usd <= 0:
+                    sell_blocked = True
 
             targets = self.engine.generate_ladder_quotes(
                 m, self.md, self.ledger, now, buy_blocked, sell_blocked

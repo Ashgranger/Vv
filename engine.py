@@ -131,10 +131,28 @@ class MarketMakingEngine:
             size_mult = Decimal(str(math.pow(float(self.cfg.level_size_mult), k)))
             level_usd = max(self.cfg.order_usd * size_mult, m.min_notional)
 
-            # BUY SIDE
-            if not buy_blocked and regime != "REGIME_D_TOXIC":
-                is_unwind = (pos_usd < 0)
-                if is_unwind or (remaining_buy_usd >= level_usd):
+            # --- BUY SIDE --- #
+            is_unwind_buy = (pos_usd < 0)
+            if is_unwind_buy:
+                # UNWIND SHORT: Always active at touch to exit position and capture spread
+                if k == 0:
+                    if self.cfg.penny and (md.ask - md.bid) > Decimal("2") * tick:
+                        cand_px = md.bid + tick
+                    else:
+                        cand_px = md.bid
+                    cand_px = min(cand_px, md.ask - tick)
+                    cand_px = q_down(cand_px, tick)
+                    qty = q_down(abs(ledger.position), step)
+                    if cand_px > ZERO and qty >= m.min_size:
+                        quotes.append(QuoteTarget(
+                            pair_index=0, side=BUY, price=cand_px, qty=qty,
+                            expected_value_bps=Decimal("1.0"), fill_probability=0.9,
+                            is_exit_quote=True
+                        ))
+            else:
+                # ADDING LONG: Quote as long as inventory has room and side is not blocked
+                can_add = (not buy_blocked) and (remaining_buy_usd >= level_usd)
+                if can_add:
                     if k == 0 and self.cfg.penny and (md.ask - md.bid) > Decimal("2") * tick:
                         cand_px = md.bid + tick
                     else:
@@ -144,10 +162,7 @@ class MarketMakingEngine:
                     cand_px = q_down(cand_px, tick)
                     
                     if cand_px > ZERO:
-                        if is_unwind:
-                            qty = q_down(abs(ledger.position), step)
-                        else:
-                            qty = q_down(level_usd / cand_px, step)
+                        qty = q_down(level_usd / cand_px, step)
                         if qty >= m.min_size:
                             capture_bps = (fair_val - cand_px) / fair_val * BPS
                             adv_bps = self.expected_adverse_move(BUY, md, ledger, now)
@@ -158,18 +173,36 @@ class MarketMakingEngine:
                             
                             ev_bps = Decimal(str(p_fill)) * (capture_bps - adv_bps) - fee_bps - inv_cost_bps
                             
-                            if (not self.cfg.enable_adaptive_ev) or (ev_bps >= self.cfg.min_ev_bps) or is_unwind:
+                            if (not self.cfg.enable_adaptive_ev) or (ev_bps >= self.cfg.min_ev_bps):
                                 quotes.append(QuoteTarget(
                                     pair_index=k, side=BUY, price=cand_px, qty=qty,
                                     expected_value_bps=ev_bps, fill_probability=p_fill,
-                                    is_exit_quote=is_unwind
+                                    is_exit_quote=False
                                 ))
                                 remaining_buy_usd -= (qty * cand_px)
 
-            # SELL SIDE
-            if not sell_blocked and regime != "REGIME_D_TOXIC":
-                is_unwind = (pos_usd > 0)
-                if is_unwind or (remaining_sell_usd >= level_usd):
+            # --- SELL SIDE --- #
+            is_unwind_sell = (pos_usd > 0)
+            if is_unwind_sell:
+                # UNWIND LONG: Always active at touch to exit position and capture spread
+                if k == 0:
+                    if self.cfg.penny and (md.ask - md.bid) > Decimal("2") * tick:
+                        cand_px = md.ask - tick
+                    else:
+                        cand_px = md.ask
+                    cand_px = max(cand_px, md.bid + tick)
+                    cand_px = q_up(cand_px, tick)
+                    qty = q_down(abs(ledger.position), step)
+                    if cand_px > ZERO and qty >= m.min_size:
+                        quotes.append(QuoteTarget(
+                            pair_index=0, side=SELL, price=cand_px, qty=qty,
+                            expected_value_bps=Decimal("1.0"), fill_probability=0.9,
+                            is_exit_quote=True
+                        ))
+            else:
+                # ADDING SHORT: Quote as long as inventory has room and side is not blocked
+                can_add = (not sell_blocked) and (remaining_sell_usd >= level_usd)
+                if can_add:
                     if k == 0 and self.cfg.penny and (md.ask - md.bid) > Decimal("2") * tick:
                         cand_px = md.ask - tick
                     else:
@@ -179,10 +212,7 @@ class MarketMakingEngine:
                     cand_px = q_up(cand_px, tick)
                     
                     if cand_px > ZERO:
-                        if is_unwind:
-                            qty = q_down(abs(ledger.position), step)
-                        else:
-                            qty = q_down(level_usd / cand_px, step)
+                        qty = q_down(level_usd / cand_px, step)
                         if qty >= m.min_size:
                             capture_bps = (cand_px - fair_val) / fair_val * BPS
                             adv_bps = self.expected_adverse_move(SELL, md, ledger, now)
@@ -193,11 +223,11 @@ class MarketMakingEngine:
                             
                             ev_bps = Decimal(str(p_fill)) * (capture_bps - adv_bps) - fee_bps - inv_cost_bps
                             
-                            if (not self.cfg.enable_adaptive_ev) or (ev_bps >= self.cfg.min_ev_bps) or is_unwind:
+                            if (not self.cfg.enable_adaptive_ev) or (ev_bps >= self.cfg.min_ev_bps):
                                 quotes.append(QuoteTarget(
                                     pair_index=k, side=SELL, price=cand_px, qty=qty,
                                     expected_value_bps=ev_bps, fill_probability=p_fill,
-                                    is_exit_quote=is_unwind
+                                    is_exit_quote=False
                                 ))
                                 remaining_sell_usd -= (qty * cand_px)
 
