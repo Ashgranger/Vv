@@ -46,6 +46,7 @@ class OrderManager:
         self.on_fill = on_fill
         
         self.orders: dict[str, Order] = {}
+        self._last_taker: dict = {}
         self.pair_slots: dict[Tuple[int, str], str] = {}
         self._unmatched: dict[str, tuple] = {}
         self.reject_until = {BUY: 0.0, SELL: 0.0}
@@ -272,6 +273,10 @@ class OrderManager:
         existing = self.get_order_by_slot(t.pair_index, t.side)
 
         if getattr(t, "is_taker", False):
+            last = self._last_taker.get(t.side)
+            if last is not None and now - last < 1.5:
+                return            # previous IOC still settling: never double-send a taker
+            self._last_taker[t.side] = now
             if existing:
                 await self.cancel(existing, now)
                 self.pair_slots.pop(slot, None)
@@ -349,6 +354,12 @@ class OrderManager:
         try:
             if c.get("price"):
                 px = Decimal(str(c["price"]))
+            # takers: record the real execution price when the exchange reports it, not our limit
+            for k in ("avgPrice", "averagePrice", "avgFillPrice", "lastFillPrice", "fillPrice"):
+                v = c.get(k)
+                if v and Decimal(str(v)) > 0:
+                    px = Decimal(str(v))
+                    break
         except Exception:
             pass
         fill_qty = Decimal(0)

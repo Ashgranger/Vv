@@ -257,6 +257,8 @@ class MarketMakingEngine:
         spr_bps = md.spread_bps
         spr_ticks = (md.ask - md.bid) / tick if (tick > ZERO and md.ask and md.bid) else Decimal("10")
         tick_bps = (tick / mid) * BPS if mid > ZERO else Decimal("0.1")
+        # Never let the emergency taker stop sit inside tick noise (coarse-tick tokens: 1 tick can be ~2bps)
+        emerg_loss_bps = max(self.cfg.emergency_taker_loss_bps, tick_bps * Decimal("4"))
         is_liquid_market = (spr_bps <= Decimal("1.2") or spr_ticks <= Decimal("2.5"))
         l = ledger.learner if (ledger and hasattr(ledger, "learner") and self.cfg.enable_online_learning) else None
         min_edge = l.min_edge_bps if l else self.cfg.min_edge_bps
@@ -404,7 +406,7 @@ class MarketMakingEngine:
                     if self.cfg.enable_smart_inventory_mgmt:
                         if unreal_bps < -self.cfg.stress_loss_bps:
                             trigger_taker = True
-                        elif unreal_bps < -self.cfg.emergency_taker_loss_bps and (has_adverse_flow or adv_score >= self.cfg.emergency_taker_score_threshold):
+                        elif unreal_bps < -emerg_loss_bps and (has_adverse_flow or adv_score >= self.cfg.emergency_taker_score_threshold):
                             trigger_taker = True
                         elif pos_ratio >= Decimal("0.80") and unreal_bps < -Decimal("3.0") and has_adverse_flow:
                             trigger_taker = True
@@ -621,7 +623,7 @@ class MarketMakingEngine:
                     if self.cfg.enable_smart_inventory_mgmt:
                         if unreal_bps < -self.cfg.stress_loss_bps:
                             trigger_taker = True
-                        elif unreal_bps < -self.cfg.emergency_taker_loss_bps and (has_adverse_flow or adv_score >= self.cfg.emergency_taker_score_threshold):
+                        elif unreal_bps < -emerg_loss_bps and (has_adverse_flow or adv_score >= self.cfg.emergency_taker_score_threshold):
                             trigger_taker = True
                         elif pos_ratio >= Decimal("0.80") and unreal_bps < -Decimal("3.0") and has_adverse_flow:
                             trigger_taker = True

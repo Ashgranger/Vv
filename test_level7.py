@@ -1068,3 +1068,32 @@ class TestCrossFeedLoop(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(bot.om.get_order_by_slot(0, BUY), "stale bid must be pulled")
         self.assertIsNotNone(bot.om.get_order_by_slot(0, SELL), "ask on the safe side is kept")
         print("✓ test_40 passed: bot pulled the stale bid ahead of Arcus repricing (ask kept).")
+
+
+class TestBybitSubscriptionFix(unittest.IsolatedAsyncioTestCase):
+    async def test_41_bybit_subscribes_separately_and_survives_bad_liquidation_topic(self):
+        sk = _Sink()
+        sent = []
+        class WS:
+            async def send(self, m): sent.append(_json.loads(m))
+        f = _feeds.BybitFeed(sk, "PUMPUSDT", "wss://x")
+        await f.on_open(WS())
+        self.assertEqual(sent[0]["args"], ["orderbook.50.PUMPUSDT", "publicTrade.PUMPUSDT"])
+        self.assertEqual(sent[1]["args"], ["allLiquidation.PUMPUSDT"])   # separate request
+        # exchange rejects the liquidation topic: price feed must NOT be disabled; legacy topic tried once
+        f.handle(_json.dumps({"success": False, "ret_msg": "error:handler not found,topic:allLiquidation.PUMPUSDT", "op": "subscribe"}))
+        self.assertFalse(f.disabled)
+        self.assertEqual(f._resub, ["liquidation.PUMPUSDT"])
+        f.handle(_json.dumps({"success": False, "ret_msg": "error:handler not found,topic:liquidation.PUMPUSDT", "op": "subscribe"}))
+        self.assertFalse(f.disabled)
+        # price data still flows
+        f.handle(_json.dumps({"topic": "orderbook.50.PUMPUSDT", "type": "snapshot", "data": {"u": 3,
+                 "b": [["0.0057", "100"]], "a": [["0.0058", "100"]]}}))
+        self.assertEqual(len(sk.bbo), 1)
+        # new allLiquidation payload (S=Buy => long liquidated => forced SELL)
+        f.handle(_json.dumps({"topic": "allLiquidation.PUMPUSDT", "data": [{"T": 1, "s": "PUMPUSDT", "S": "Buy", "v": "1000", "p": "0.0057"}]}))
+        self.assertEqual(sk.liqs[-1][1], "SELL")
+        # a bad ORDERBOOK subscription (symbol not listed) disables the feed instead of reconnect-looping
+        f.handle(_json.dumps({"success": False, "ret_msg": "error:handler not found,topic:orderbook.50.PUMPUSDT", "op": "subscribe"}))
+        self.assertTrue(f.disabled)
+        print("✓ test_41 passed: Bybit liquidation rejection no longer kills the price feed.")

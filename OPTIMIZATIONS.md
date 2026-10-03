@@ -12,3 +12,5 @@
 
 Optional extra speed:  pip install uvloop orjson
 - CROSS-VENUE FEEDS (feeds.py): Binance USDT-M (bookTicker, depth10@100ms, aggTrade, forceOrder) and Bybit v5 linear (orderbook.50 snapshot+delta, publicTrade, liquidation). Signals: basis-adjusted lead/lag (removes USDT-vs-USD offset), per-venue velocity, depth-weighted OBI, external aggressor flow, liquidation pressure, dispersion; all staleness-gated and cleared on disconnect. Used in fair value, expected adverse move, and a hard "pull the stale side" guard (consensus across venues required). See CROSS_* in .env.example.
+- FIX Bybit feed: liquidation topic is now `allLiquidation.<SYM>` (legacy `liquidation.` fallback), subscribed in a SEPARATE request so a rejected optional topic can't starve price data; bad symbol disables the feed instead of reconnect-looping.
+- FIX single-venue pulls need 1.5x the velocity threshold; emergency taker stop floored at 4 ticks; duplicate taker IOCs suppressed for 1.5s; taker fills use exchange avg price when reported.
