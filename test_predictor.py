@@ -159,7 +159,8 @@ class TestPredictor(unittest.IsolatedAsyncioTestCase):
     async def test_10_full_loop_runs_with_predictor(self):
         bot, s, clock = sim.make(EXTRA_LEVELS=1, ORDER_USD=20, MAX_POSITION_USD=100)
         for i in range(30):
-            await sim.step(bot, s, clock, "80000.0", "80000.8", bsz="10", asz="10")
+            o = 80000.0 + (i % 5) * 2.0
+            await sim.step(bot, s, clock, str(o), str(o + 0.8), bsz="10", asz="10")
         self.assertGreater(bot.predictor.m_hold.n, 0, "hold model trains from unconditional samples")
         self.assertIn("PRED", bot.predictor.summary())
 

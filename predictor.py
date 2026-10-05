@@ -117,7 +117,8 @@ class OnlineModel:
             g = _clip(y - p, -self.ytol, self.ytol)
             loss = g * g
             self.res_var = 0.995 * self.res_var + 0.005 * max(0.05, g * g)
-            self.ema_hit = 0.99 * self.ema_hit + 0.01 * (1.0 if (p * y) > 0 else 0.0)
+            if y != 0.0:   # a static market (no move) says nothing about direction
+                self.ema_hit = 0.99 * self.ema_hit + 0.01 * (1.0 if (p * y) > 0 else 0.0)
         step = lr * g / nrm
         for i in range(NF):
             self.w[i] += step * x[i] - lr * self.l2 * (self.w[i] - self.prior[i])
@@ -348,7 +349,8 @@ class Predictor:
             if open_pos and _f(ledger.avg_cost) > 0:
                 unreal = (mid - _f(ledger.avg_cost)) / _f(ledger.avg_cost) * 1e4 * (1 if pos > 0 else -1)
                 hold_s = ledger.hold_s(now)
-            for side in (BUY, SELL):
+            dead = (not open_pos) and _f(md.vol_bps) < 0.01
+            for side in () if dead else (BUY, SELL):
                 is_mine = open_pos and ((side == BUY) == (pos > 0))
                 x = self.features(md, side, now, ledger=ledger, extras=is_mine, pos_usd=pos_usd,
                                   unreal_bps=unreal, hold_s=hold_s)
@@ -358,6 +360,8 @@ class Predictor:
             if now - dl > 3.0 * self.hold_h or mid0 <= 0:
                 continue
             ret = sgn * (mid - mid0) / mid0 * 1e4
+            if ret == 0.0 and x[IX["hold_t"]] == 0.0:
+                continue
             self.m_hold.update(x, ret)
             self.m_hloss.update(x, 1.0 if ret < -self.loss_thr else 0.0)
             self._dirty = True
