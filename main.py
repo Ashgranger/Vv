@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""CLI Entrypoint for Volatile Market Making Bot."""
+"""Arcus perp market maker (Level 7 Quantitative Engine).
+
+  python main.py                 # paper-trade (DRY_RUN=1): real market data, simulated fills, no orders
+  python main.py --live          # send real post-only limit orders
+  python main.py scan            # rank markets by spread vs movement (pick where to quote)
+"""
 from __future__ import annotations
 
 import argparse
@@ -9,96 +14,68 @@ import os
 import signal
 import sys
 
-from config import Config
-from environment import VolatileMarketEnv
-from bot import VolatileMarketMaker
+from utils import Fatal, setup_logging
 
-log = logging.getLogger("VolatileMM.main")
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Volatile Market Making Bot (1-8 bps Spread)")
-    parser.add_argument("--mode", choices=["sim", "live"], default=None, help="Execution mode ('sim' or 'live')")
-    parser.add_argument("--env-file", default=".env", help="Path to .env configuration file")
-    parser.add_argument("--market", default=None, help="Target trading market symbol (e.g. BTC-USD)")
-    parser.add_argument("--order-size", type=float, default=None, help="Order size in base asset")
-    parser.add_argument("--max-pos", type=float, default=None, help="Maximum position limit")
-    parser.add_argument("--min-edge", type=float, default=None, help="Minimum half-spread edge in bps")
-    parser.add_argument("--max-edge", type=float, default=None, help="Maximum half-spread edge in bps")
-    parser.add_argument("--skew-bps", type=float, default=None, help="Inventory skew in bps")
-    parser.add_argument("--duration", type=float, default=None, help="Simulation duration in seconds")
-    parser.add_argument("--seed", type=int, default=None, help="Simulation random seed")
-    return parser.parse_args()
+log = logging.getLogger("main")
 
 
 def main() -> None:
-    args = parse_args()
-    
-    # Load configuration
-    env_file = args.env_file if os.path.isfile(args.env_file) else None
-    cfg = Config.from_env(env_file)
+    ap = argparse.ArgumentParser(description="Arcus perp market maker (Level 7 Engine)")
+    ap.add_argument("cmd", nargs="?", default="run", choices=["run", "scan"])
+    ap.add_argument("--live", action="store_true", help="send real orders (overrides DRY_RUN=1)")
+    ap.add_argument("--env", choices=["mainnet", "testnet"], help="override ARCUS_ENV")
+    ap.add_argument("--market", help="override MARKET")
+    ap.add_argument("--env-file", default=".env")
+    ap.add_argument("--seconds", type=float, default=30, help="scan sampling time")
+    args = ap.parse_args()
 
-    # CLI overrides
-    if args.mode: cfg.mode = args.mode
-    if args.market: cfg.market = args.market
-    if args.order_size: cfg.order_size = args.order_size
-    if args.max_pos: cfg.max_position = args.max_pos
-    if args.min_edge: cfg.min_edge_bps = args.min_edge
-    if args.max_edge: cfg.max_edge_bps = args.max_edge
-    if args.skew_bps: cfg.skew_bps = args.skew_bps
-    if args.duration: cfg.sim_duration_s = args.duration
-    if args.seed is not None: cfg.sim_seed = args.seed
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(args.env_file)
+    except ImportError:
+        pass
+    if args.env:
+        os.environ["ARCUS_ENV"] = args.env
+    if args.market:
+        os.environ["MARKET"] = args.market
+    if args.live:
+        os.environ["DRY_RUN"] = "0"
 
-    log.info("=" * 75)
-    log.info("VOLATILE MARKET MAKER (1-8 BPS ADAPTIVE REGIME)")
-    log.info(f"Mode: {cfg.mode.upper()} | Pair: {cfg.market} | Size: {cfg.order_size} | MaxPos: {cfg.max_position}")
-    log.info(f"Spread Target: {cfg.target_spread_min_bps}-{cfg.target_spread_max_bps} bps | Edge: {cfg.min_edge_bps}-{cfg.max_edge_bps} bps | Skew: {cfg.skew_bps} bps")
-    log.info("=" * 75)
+    setup_logging(os.getenv("LOG_LEVEL", "INFO"))
+    from config import Config
+    try:
+        cfg = Config.from_env()
+    except Fatal as e:
+        sys.exit(f"config error: {e}")
 
-    if cfg.mode == "sim":
-        env = VolatileMarketEnv(cfg)
+    if args.cmd == "scan":
+        from scan import scan
+        asyncio.run(scan(cfg, args.seconds))
+        return
 
-        class SimAdapter:
-            def __init__(self, e: VolatileMarketEnv): self.e = e
-            def place_order(self, s, p, q): return self.e.place_order(s, p, q)
-            def cancel_order(self, oid): self.e.cancel_order(oid)
-            def cancel_all_orders(self): self.e.cancel_all_orders()
-            def get_fills(self): return self.e.bot_fills
-            def step(self, dt): return self.e.step(dt)
-            def get_analytics(self): return self.e.get_analytics()
+    from bot import MarketMaker
+    log.info("env=%s market=%s %s | order=$%s max_pos=$%s min_edge=%sbps skew=%sbps ladder_levels=%d "
+             "min_ev=%sbps tox_mult=%s", cfg.env_name, cfg.market,
+             "PAPER (no orders sent)" if cfg.dry_run else "LIVE", cfg.order_usd, cfg.max_position_usd,
+             cfg.min_edge_bps, cfg.skew_bps, cfg.extra_levels, cfg.min_ev_bps, cfg.tox_mult)
+    if not cfg.dry_run and cfg.env_name == "mainnet":
+        log.warning("LIVE ON MAINNET - real funds. Only post-only limit orders. Ctrl+C cancels all and exits.")
 
-        adapter = SimAdapter(env)
-        bot = VolatileMarketMaker(cfg, adapter)
-        analytics = bot.run_sim(cfg.sim_duration_s)
+    async def _main() -> None:
+        bot = MarketMaker(cfg)
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, bot.stop_evt.set)
+            except NotImplementedError:
+                signal.signal(sig, lambda *_: loop.call_soon_threadsafe(bot.stop_evt.set))
+        await bot.run()
 
-        print("\n" + "=" * 75)
-        print("SIMULATION PERFORMANCE REPORT")
-        print("=" * 75)
-        print(f"{'Total Mark-to-Market PnL':<30} : ${analytics['total_pnl']:+.2f}")
-        print(f"{'Realized PnL':<30} : ${analytics['realized_pnl']:+.2f}")
-        print(f"{'Unrealized PnL':<30} : ${analytics['unrealized_pnl']:+.2f}")
-        print(f"{'Total Fills Count':<30} : {analytics['total_fills']}")
-        print(f"{'Ending Inventory':<30} : {analytics['final_position']:+.5f} BTC")
-        print(f"{'Volume Traded (USD)':<30} : ${analytics['volume_traded_usd']:.2f}")
-        print(f"{'Avg Markout at +1s (bps)':<30} : {analytics['avg_markout_1s_bps']:+.2f} bps")
-        print(f"{'Avg Markout at +5s (bps)':<30} : {analytics['avg_markout_5s_bps']:+.2f} bps")
-        print(f"{'Adverse Fill Ratio (+1s)':<30} : {analytics['adverse_fill_ratio_1s']*100:.1f}%")
-        print(f"{'Adverse Fill Ratio (+5s)':<30} : {analytics['adverse_fill_ratio_5s']*100:.1f}%")
-        print("=" * 75)
-
-    elif cfg.mode == "live":
-        log.info("Initializing Live Exchange Adapter...")
-        # Import exchange connector from local environment
-        sys.path.insert(0, "/working_dir")
-        try:
-            from bot import MarketMaker as LiveMarketMaker
-            from config import Config as LiveConfig
-            live_cfg = LiveConfig.from_env()
-            live_bot = LiveMarketMaker(live_cfg)
-            asyncio.run(live_bot.run())
-        except Exception as e:
-            log.error(f"Failed to start live mode: {e}")
-            sys.exit(1)
+    try:
+        import uvloop
+        asyncio.run(_main(), loop_factory=uvloop.new_event_loop)
+    except ImportError:
+        asyncio.run(_main())
 
 
 if __name__ == "__main__":
