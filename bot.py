@@ -20,6 +20,7 @@ from signer import Signer
 from ledger import Ledger, Fill
 from engine import MarketMakingEngine, QuoteTarget
 from orders import OrderManager, Order
+from predictor import Predictor
 from utils import BPS, BUY, SELL, ZERO, ONE, Fatal, fmt
 
 log = logging.getLogger("bot")
@@ -90,6 +91,8 @@ class MarketMaker:
         self._loss_pause_until = 0.0
         self._pnl_base = ZERO
         self.engine = MarketMakingEngine(cfg)
+        self.predictor = Predictor(cfg)
+        self.engine.predictor = self.predictor
         self.om = OrderManager(cfg, self.ex, self.signer, self._get_market, self._on_fill)
 
         self._recent_fills: deque = deque()
@@ -241,6 +244,10 @@ class MarketMaker:
         min_notional = m.min_notional if m else Decimal("5")
         
         is_maker = not getattr(o, "is_taker", False)
+        try:
+            self.predictor.on_fill(side, o.pair_index, price, self.md, self.ledger, now, is_maker=is_maker)
+        except Exception as e:
+            log.debug("predictor.on_fill error: %s", e)
         fill = self.ledger.on_fill(side, qty, price, mid, now, min_notional, is_maker=is_maker)
         current_mid = self.md.mid or price
         log.info("FILL L%d %s %s @ %s | edge=%sbps pos=%s pnl=$%s ET=%s",
@@ -248,7 +255,10 @@ class MarketMaker:
                  fmt(self.ledger.position), fmt(self.ledger.total_pnl(current_mid)),
                  et_hhmmss(time.time()))
         try:
+            lp = getattr(self.predictor, "last_fill_pred", None) or {}
             self._fill_ctx = {
+                "pred_p_fill": round(lp.get("p_fill", 0.0), 3), "pred_p_adv": round(lp.get("p_adv", 0.0), 3),
+                "pred_drift2": round(lp.get("drift", 0.0), 3), "pred_drift5": round(lp.get("drift5", 0.0), 3),
                 "level": o.pair_index, "et": et_hhmmss(time.time()),
                 "obi": float(self.md.obi), "tfi": float(self.md.trade_flow_imbalance(10.0, now)),
                 "spr_bps": float(self.md.spread_bps), "taker": bool(getattr(o, "is_taker", False)),
@@ -509,10 +519,18 @@ class MarketMaker:
                     sell_blocked = True
 
             existing_slots = set(self.om.pair_slots.keys())
+            try:
+                self.predictor.on_tick(self.md, self.ledger, now)
+            except Exception as e:
+                log.debug("predictor.on_tick error: %s", e)
             targets = self.engine.generate_ladder_quotes(
                 m, self.md, self.ledger, now, buy_blocked, sell_blocked, existing_slots=existing_slots
             )
             self._log_quote_opportunity(targets, now)
+            try:
+                self.predictor.register_quotes(targets, self.md, self.ledger, now)
+            except Exception as e:
+                log.debug("predictor.register error: %s", e)
 
             blocked_sides = set()
             if buy_blocked:
@@ -624,6 +642,8 @@ class MarketMaker:
                      ",".join(v.venue for v in fr) or "NONE (feeds down - signals off)",
                      float(div), float(cr.cross_velocity_bps(3.0, now)), float(cr.cross_obi(now)),
                      float(cr.cross_tfi(5.0, now)), float(cr.cross_dispersion_bps(now)), down, up)
+        if getattr(self.cfg, "enable_predictor", False):
+            log.info(self.predictor.summary())
         if self.cfg.enable_online_learning:
             s = self.ledger.learner.get_summary()
             p = s["params"]
@@ -748,6 +768,7 @@ class MarketMaker:
                 reconnect_delay = min(reconnect_delay * 1.5, max_reconnect_delay)
 
         log.info("Stopping bot - cancelling resting orders for market %s...", self.md.info.name if self.md.info else self.cfg.market)
+        self.predictor.save()
         if self.cfg.enable_online_learning:
             self.ledger.learner.save()
             log.info("Saved online learning state to %s", self.cfg.learning_state_path)
