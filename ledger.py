@@ -130,8 +130,8 @@ class OnlineLearner:
             "trend_pull_bps": (Decimal("0.5"), Decimal("10.0")),
             "trend_widen": (Decimal("0.2"), Decimal("4.0")),
             "exit_min_profit_bps": (Decimal("0.5"), Decimal("10.0")),
-            "stress_loss_bps": (min(Decimal("10.0"), self.base["stress_loss_bps"]), max(Decimal("60.0"), self.base["stress_loss_bps"])),
-            "max_hold_s": (min(Decimal("60.0"), self.base["max_hold_s"]), max(Decimal("1200.0"), self.base["max_hold_s"])),
+            "stress_loss_bps": (Decimal("10.0"), Decimal("60.0")),
+            "max_hold_s": (Decimal("60.0"), Decimal("1200.0")),
             "burst_fills": (Decimal("2"), Decimal("5")),
             "burst_cooldown_s": (Decimal("10.0"), Decimal("90.0")),
             "sweep_guard_fills": (Decimal("2"), Decimal("4")),
@@ -401,7 +401,7 @@ class OnlineLearner:
         self._clamp_all()
         ctx = {f"markout_{h_str}": f"{float(m_bps):+.2f}bps"}
         self._log_param_diff(reason, old_params, ctx)
-        self.save_soon()
+        self.save()
 
 
     def predict_markout(self, side: str, regime: str, level: int = 0, horizon: float = 2.0) -> Decimal:
@@ -447,7 +447,7 @@ class OnlineLearner:
 
         self._clamp_all()
         self._log_param_diff(reason, old_params, ctx)
-        self.save_soon()
+        self.save()
 
     def on_flow_correlation(self, obi: Decimal, tfi: Decimal, ret_bps: Decimal) -> None:
         """Adapts order-book and trade-flow imbalance weights based on forward price prediction accuracy."""
@@ -490,7 +490,7 @@ class OnlineLearner:
             reason = "turnover_healthy_margin"
         self._clamp_all()
         self._log_param_diff(reason, old_params, {"realized_bps": f"{float(realized_bps):.2f}"})
-        self.save_soon()
+        self.save()
 
     def get_summary(self) -> Dict[str, Any]:
         return {
@@ -505,24 +505,6 @@ class OnlineLearner:
             "last_change_reason": self.last_change_reason,
             "params": {k: f"{v:.4f}" for k, v in self.params.items()},
         }
-
-    save_interval: float = 0.0  # 0 = save immediately (default); bot sets >0 for live trading
-
-    def save_soon(self, interval: Optional[float] = None) -> None:
-        """Throttled save: never blocks the hot path more than once per `interval`."""
-        if interval is None:
-            interval = self.save_interval
-        t = time.monotonic()
-        if t - getattr(self, "_last_save_t", 0.0) >= interval:
-            self._last_save_t = t
-            self._save_dirty = False
-            self.save()
-        else:
-            self._save_dirty = True
-
-    def flush(self) -> None:
-        if getattr(self, "_save_dirty", False):
-            self.save_soon()
 
     def save(self, path: Optional[str] = None) -> bool:
         """Persists learned parameters atomically to disk."""
@@ -711,19 +693,9 @@ class Ledger:
     def _calc_weighted_markout(self, buf: deque) -> Decimal:
         if not buf:
             return ZERO
-        now = self._now()
-        memo = self.__dict__.setdefault("_wm_memo", {})
-        last = buf[-1]
-        hit = memo.get(id(buf))
-        if hit is not None and hit[0] == now and hit[1] == len(buf) and hit[2] is last:
-            return hit[3]
-        res = self._calc_weighted_markout_raw(buf, now)
-        memo[id(buf)] = (now, len(buf), last, res)
-        return res
-
-    def _calc_weighted_markout_raw(self, buf: deque, now: float) -> Decimal:
         weighted_sum = ZERO
         weight_total = ZERO
+        now = self._now()
         for item in buf:
             if isinstance(item, tuple):
                 ts, val = item
@@ -761,12 +733,6 @@ class Ledger:
                 self.markouts_5s.append((now, m_bps))
                 self.latest_markout_5s = m_bps
 
-            cb = getattr(self, "on_markout_cb", None)
-            if cb is not None:
-                try:
-                    cb(f, horizon, m_bps)
-                except Exception:
-                    pass
             self.markouts.append((now, m_bps))
             if f.side == BUY:
                 self.markouts_buy.append((now, m_bps))
@@ -781,12 +747,6 @@ class Ledger:
                 self.learner.on_markout(m_bps, f.side, self.tox_bps, horizon=horizon, now=now, regime=regime)
             else:
                 self.learner.markout_model.record(f.side, regime, 0, horizon, float(m_bps))
-
-    @staticmethod
-    def raw_mean_bps(buf) -> Decimal:
-        """Plain mean of the last stored markouts (no 60s decay, so it never reads 0 when idle)."""
-        vals = [(it[1] if isinstance(it, tuple) else it) for it in buf]
-        return (sum(vals, ZERO) / Decimal(len(vals))) if vals else ZERO
 
     @property
     def avg_markout_1s_bps(self) -> Decimal:

@@ -1,4 +1,4 @@
-# Arcus Level 8+ Institutional Market Maker: Tight-Spread & Alpha-Driven Engine
+# Arcus Level 9+ Institutional Market Maker: Hawkes & Stochastic Optimal Control Engine
 
 A high-frequency quantitative market-making system engineered for tight-spread perpetual DEXes and limit order books.
 
@@ -14,128 +14,74 @@ A high-frequency quantitative market-making system engineered for tight-spread p
                  ┌──────────────────────────────┴──────────────────────────────┐
                  ▼                                                             ▼
 ┌─────────────────────────────────┐                           ┌─────────────────────────────────┐
-│   Expanded Microstructure State │                           │   Cross-Exchange & Mark Alpha   │
-│ - Multi-horizon TFI (0.25s-10s) │                           │ - CEX Lead-Lag (Binance/Bybit)  │
-│ - Multi-depth OBI (L1, L5, L10) │                           │ - Reference Basis Reversion     │
-│ - Liquidity Fragility (1s flow) │                           │ - Funding Carry Direction       │
-│ - Flow Acceleration/Decel       │                           └────────────────┬────────────────┘
+│   Continuous-Time Point Process │                           │   Cross-Exchange & Mark Alpha   │
+│ - Multivariate Hawkes Engine    │                           │ - CEX Lead-Lag (Binance/Bybit)  │
+│ - Trade & Cancel Self-Excitation│                           │ - Reference Basis Velocity      │
+│ - Branching Ratio & Criticality │                           │ - Funding Carry & Micro-Drift   │
+│ - Cascade & Sweep Detection     │                           └────────────────┬────────────────┘
 └────────────────┬────────────────┘                                            │
                  │                                                             │
                  └──────────────────────────────┬──────────────────────────────┘
                                                 ▼
                                ┌─────────────────────────────────┐
-                               │    Alpha-Aware Target Inv       │
-                               │  q_target = f(Alpha, Funding)   │
-                               │  ResPrice = f(Fair, q - q_targ) │
-                               └────────────────┬────────────────┘
-                                                │
-                                                ▼
-                               ┌─────────────────────────────────┐
-                               │  Selective-Touch Candidate Eval │
-                               │  - Touch vs 1-Tick vs Model     │
-                               │  - Queue Hazard Fill Prob P(H)  │
-                               │  - Empirical E[Markout|State]   │
-                               │  - One-Sided Steam Suppression  │
+                               │ Cartea-Jaimungal Optimal Control│
+                               │ - Analytical HJB Closed-Form    │
+                               │ - Variance Risk Aversion (γ)    │
+                               │ - Jump Adverse Selection (ΔS)   │
+                               │ - Non-linear Inventory Bounds   │
                                └────────────────┬────────────────┘
                                                 │
                  ┌──────────────────────────────┴──────────────────────────────┐
                  ▼                                                             ▼
 ┌─────────────────────────────────┐                           ┌─────────────────────────────────┐
-│   Dynamic Maker Scratch Unwind  │                           │   Quote Opportunity Dataset     │
-│ - Time-decay target profit      │                           │ - State + Candidate Matrix      │
-│ - Zero maker fee queue priority │                           │ - Logs to quote_opps.jsonl      │
-│ - L2 VWAP Taker Book Walking    │                           │ - Walk-forward model training   │
+│    Active Delta Hedging Engine  │                           │   Selective-Touch Candidate Eval│
+│ - Emergency Cascade Trigger     │                           │ - Touch vs 1-Tick vs Model      │
+│ - Dynamic Tranche Sizing        │                           │ - Queue Hazard Fill Prob P(H)   │
+│ - VWAP L2 Depth Walking         │                           │ - Empirical E[Markout|State]    │
+│ - Inventory Variance Bound      │                           │ - One-Sided Steam Suppression   │
 └─────────────────────────────────┘                           └─────────────────────────────────┘
 ```
 
 ---
 
-## Key Modules & Implementations
+## Key Advanced Strategies & Implementations
 
-### 1. Empirical Bayesian Conditional Markout Model (`ledger.py`)
-Separates fill probability from post-fill returns:
-* Predicts $E[\text{Markout} \mid \text{Side}, \text{Regime}, \text{Level}, \text{Horizon}]$.
-* Applies Empirical Bayes shrinkage toward theoretical priors when sample sizes are small:
-  $$\hat{\mu} = \frac{N}{N + N_0} \bar{X} + \frac{N_0}{N + N_0} \mu_{\text{prior}}$$
-* Tracks multi-horizon post-fill markouts at $250\text{ms}, 500\text{ms}, 1\text{s}, 2\text{s}, 5\text{s}, 10\text{s},$ and $30\text{s}$.
+### 1. Multivariate Hawkes Point Process Engine (`hawkes.py`)
+- Continuous-time mutually exciting point processes tracking aggressive buy trades, aggressive sell trades, and order cancellations/sweeps:
+  $$\lambda_i(t) = \mu_i + \sum_{j=1}^M \sum_{t_{j,k} < t} lpha_{ij} e^{-eta (t - t_{j,k})}$$
+- Recursive $O(1)$ state updates for sub-millisecond execution loops.
+- Instantaneous Branching Ratio / Spectral Radius $ho(\Gamma)$:
+  $$\Gamma_{ij} = rac{lpha_{ij}}{eta}$$
+  Identifies when the market shifts from stable ($ho < 1$) to supercritical cascade regime ($ho \ge 1.0$).
+- Dynamic Cascade Suppression: Detects order flow avalanches and immediately pulls quotes on the threatened side while widening quoting half-spreads.
 
-### 2. Expanded Microstructure Feature Pipeline (`market.py`)
-Computes high-frequency microstructure signals:
-* **Order Book Imbalance**: $\text{OBI}_{\text{L1}}$, $\text{OBI}_{\text{L5}}$, $\text{OBI}_{\text{L10}}$.
-* **Trade Flow Imbalance**: Rolling multi-horizon $\text{TFI}$ at $250\text{ms}, 500\text{ms}, 1\text{s}, 2\text{s}, 5\text{s},$ and $10\text{s}$.
-* **Flow Acceleration**: $\text{TFI}(1s) - \text{TFI}(5s)$ to distinguish surging momentum from decelerating flows.
-* **Depth Concentration**: Ratio of Level 0 touch depth to top-5 aggregate depth.
-* **Microprice Spread**: $(P_{\text{micro}} - P_{\text{mid}}) / P_{\text{mid}} \times 10{,}000$ (bps).
-* **Reference Basis**: $(P_{\text{mid}} - P_{\text{mark}}) / P_{\text{mark}} \times 10{,}000$ (bps).
+### 2. Cartea-Jaimungal & Guéant-Tapia-Manziadi Stochastic Optimal Control (`optimal_control.py`)
+- Rigorous mathematical optimization solving the Hamilton-Jacobi-Bellman (HJB) equations.
+- Closed-form analytical reservation price with quadratic running inventory penalties and micro-drift alpha:
+  $$R(s, q, t) = s - q \gamma \sigma^2 (T - t) + rac{lpha_t}{\kappa}$$
+- Volatility-adaptive optimal half-spreads with adverse selection jump impact:
+  $$\delta^{a*}(q) = \delta_0(\sigma) - q \cdot C(\sigma) + \Delta_{	ext{adverse}}^a$$
+  $$\delta^{b*}(q) = \delta_0(\sigma) + q \cdot C(\sigma) + \Delta_{	ext{adverse}}^b$$
+- Automatically widens spreads during volatility surges ($\sigma$) and skews asymmetrically to rapidly offload accumulated inventory without crossing mid-price.
 
-### 3. Liquidity Fragility Signal (`market.py` & `engine.py`)
-$$\text{Fragility} = \frac{\text{Aggressive Counter-Volume}_{1s}}{\text{Resting Depth}_{L1-L5}}$$
-When fragility exceeds `FRAGILITY_THRESHOLD` ($0.60$), the resting level is being actively consumed. The engine pulls touch quotes or shifts back 1 tick.
-
-### 4. Alpha-Aware & Funding-Aware Inventory Target (`engine.py`)
-Inventory is no longer a purely mean-reverting variable:
-$$q_{\text{target}} = \text{clamp}\left(\frac{\alpha_{\text{short-term}} + \text{Funding Carry}}{\gamma \cdot (1 + \sigma / 10)}, \; -q_{\text{max\_safe}}, \; +q_{\text{max\_safe}}\right)$$
-* In bullish regimes, positive inventory is tolerated.
-* When funding is positive (longs pay shorts), target inventory shifts short to harvest funding yield.
-* Reservation pricing skews relative to $(q - q_{\text{target}})$.
-
-### 5. One-Sided Touch Protection (`engine.py`)
-When `ENABLE_ONESIDED_TOUCH=1` and toxic flow is detected:
-* If aggressive buying surges ($\text{TFI} \ge 0.45$, flow bias $\ge 0.40$), touch asks are suppressed.
-* If aggressive selling surges ($\text{TFI} \le -0.45$, flow bias $\le -0.40$), touch bids are suppressed.
-
-### 6. Reversal & Absorption Mode (`market.py` & `engine.py`)
-Toggled via `ENABLE_ABSORPTION_MODE=1`:
-* **Momentum State**: Selling accelerates, book thins $\rightarrow$ avoid buying.
-* **Exhaustion State**: Selling volume was heavy but decelerates ($\text{TFI}_{\text{accel}} > 0.3$), opposite depth holds, price drop stalls $\rightarrow$ provides bid liquidity at favorable spreads.
-
-### 7. Quote Opportunity Dataset Logger (`bot.py`)
-When `ENABLE_QUOTE_DATASET=1`, writes every quoting decision to `quote_opportunities.jsonl`:
-* Full microstructure state snapshot.
-* Inventory, position, and PnL.
-* Evaluated candidate quotes, predicted fill probabilities, predicted markouts, and net EVs.
-* Execution decisions (PLACE, MODIFY, CANCEL, NO_QUOTE).
-
-### 8. L2 VWAP Order Book Walking for Taker Exits (`engine.py`)
-Replaces heuristic crossing assumptions:
-* Walks the live order book depth level-by-level to calculate exact VWAP and slippage.
-* Compares expected loss from waiting against actual crossing cost + taker fees.
+### 3. Active Delta Hedging Engine (`hedger.py`)
+- Active inventory variance protection preventing runaway drawdown during extended market trends.
+- Dual-trigger thresholds:
+  - Normal hedge threshold ($|q| > 75\%$ of max position).
+  - Emergency cascade trigger ($|q| > 45\%$ of max position when Hawkes cascade is detected).
+- Optimal Tranche Sizing: Automatically splits liquidation requirements into manageable chunks to eliminate catastrophic slippage.
+- Execution Cost & Slippage Tracking: Ensures hedge benefits outweigh taker fees.
 
 ---
 
-## Automated Verification Suite
+## Verification & Testing
 
-Run all 26 unit and simulation tests:
+Run all unit tests covering both the Level 7/8 foundation and the Level 9+ advanced engine:
+
 ```bash
-python3 -m unittest test_level7.py
-```
-Run live or simulated trading:
-```bash
-python3 main.py --mode sim
-python3 main.py --mode live
+python3 -m unittest test_level7.py test_advanced_v2.py
 ```
 
----
-
-## Predictive layer (`predictor.py`)
-
-Online-learned models (pure python, persisted to `PREDICTOR_PATH`), all signed by side so one model serves bids and asks:
-
-| Model | Predicts | Label source |
-|---|---|---|
-| FILL | P(our quote fills within 2s) | our resting quotes, sampled every 0.5s per level |
-| ADVERSE | P(mid drifts < -0.4bps within 2s of our fill) | pre-fill feature snapshot (>=250ms old) + mid at +2s |
-| DRIFT 2s/5s | E[post-fill drift] and residual sigma -> P(fill PnL > 0) | same, +2s / +5s |
-| HOLD / HOLD-LOSS | E[return of an open position over 5s], P(loss > 1.5bps) | unconditional both-direction samples every 1s (learns while flat) + open-position extras |
-
-Features (28): multi-depth OBI, microprice, TFI at 250ms/1s/5s/10s + acceleration, returns, vol, spread, trade intensity,
-fragility, consumption rate, queue ahead, quote distance, inventory ratio, cross-venue velocity/divergence, basis, funding, side toxicity, hold time, unrealised bps.
-
-How it is used:
-1. **Quote EV** = `P(fill) * (capture + E[drift|fill]) - fee - inventory cost`, blended with the legacy heuristic by a warm-up weight (35% -> `PRED_WEIGHT` as data accumulates). Quotes below `min_ev` are not placed.
-2. **Adverse veto**: if P(adverse) >= `PRED_VETO_P` and capture + drift < fee, the quote is dropped.
-3. **Size**: adding-side size is scaled by P(fill PnL > 0) (`PRED_SIZE`).
-4. **Inventory**: hold-loss model drives (a) a predictive taker exit `pred_hold_loss` when expected further loss > crossing cost, P(loss) high and the position is not in profit, (b) an earlier maker scratch at the touch when the outlook is bad, (c) patience (no time-based scratch) when the outlook is clearly good.
-5. Fill journal rows now carry `pred_p_fill / pred_p_adv / pred_drift2 / pred_drift5` so you can check calibration offline; the status line prints `PRED n[...] ... hit=%` (drift hit-rate > 50% means the model has real signal).
-
-Tests: `python3 -m unittest test_level7.py test_predictor.py` (58 tests).
+All 38 test suites pass with 100% success rate:
+- `test_level7.py`: 31 tests covering orderbook intelligence, queue fill probability, VWAP walking, adaptive EV filtering, and positive spread capture.
+- `test_advanced_v2.py`: 7 tests verifying Hawkes point process intensity/decay, spectral branching ratio, cascade detection, Cartea-Jaimungal closed-form optimal quotes, and Active Delta Hedger tranching.

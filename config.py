@@ -43,18 +43,6 @@ def _parse_guarantee_spread_capture(name: str, default: str) -> tuple[bool, Deci
         return True, Decimal("0.5")
     return False, Decimal("0")
 
-def _parse_weights(raw: str) -> dict:
-    out = {}
-    for part in raw.split(","):
-        if ":" in part:
-            k, v = part.split(":", 1)
-            try:
-                out[k.strip().lower()] = float(v)
-            except ValueError:
-                pass
-    return out
-
-
 @dataclass
 class Config:
     # --- connection -------------------------------------------------------- #
@@ -142,26 +130,6 @@ class Config:
     # --- Inventory Risk Management & Taker Loss Cut ------------------------ #
     enable_smart_inventory_mgmt: bool
     taker_fee_bps: Decimal
-    taker_slip_bps: Decimal
-    adv_obi_exit: bool
-    exclude_own_orders: bool
-    enable_dynamic_sizing: bool
-    dyn_size_min: Decimal
-    dyn_inv_cap_frac: Decimal
-    dyn_inv_min: Decimal
-    dyn_edge_ref_bps: Decimal
-    dyn_edge_min_n: int
-    dyn_warmup_mult: Decimal
-    dyn_vol_ref_bps: Decimal
-    dyn_dd_weight: Decimal
-    own_order_min_age_s: float
-    session_loss_action: str
-    quote_dataset_min_s: float
-    quote_dataset_max_mb: float
-    adv_obi_thresh: Decimal
-    adv_obi_secs: float
-    adv_obi_loss_bps: Decimal
-    taker_fill_price_mode: str
     emergency_taker_loss_bps: Decimal
     emergency_taker_score_threshold: Decimal
 
@@ -177,7 +145,6 @@ class Config:
     queue_reset_cost_bps: Decimal
     enable_absorption_mode: bool
     enable_onesided_touch: bool
-    et_pause_windows: str
     enable_quote_dataset: bool
     quote_dataset_path: str
     enable_empirical_learner: bool
@@ -194,9 +161,6 @@ class Config:
     max_actions_per_min: int
     loop_s: float
     heartbeat_s: float
-    dms_enabled: bool
-    dms_ttl_s: float
-    dms_required: bool
     reconcile_s: float
     status_s: float
     stale_s: float
@@ -205,43 +169,23 @@ class Config:
     quote_outside_rth: bool
     journal_path: str
 
-    # --- external venues (Binance / Bybit) ---------------------------------- #
-    cross_feed: bool = True
-    cross_venues: str = "binance,bybit"
-    binance_symbol: str = ""
-    bybit_symbol: str = ""
-    binance_ws_url: str = "wss://fstream.binance.com"
-    bybit_ws_url: str = "wss://stream.bybit.com/v5/public/linear"
-    cross_stale_s: float = 2.0
-    cross_basis_tau_s: float = 45.0
-    cross_warmup_s: float = 10.0
-    cross_max_shift_bps: float = 4.0
-    cross_flow_k_usd: float = 20000.0
-    cross_weights: dict = None
-    cross_pull_bps: float = 2.5
-    cross_vel_pull_bps: float = 3.0
-    cross_pull_hold_s: float = 1.5
-    cross_liq_usd: float = 50000.0
-    cross_div_adverse_mult: float = 1.0
-    cross_flow_weight: float = 0.3
+    # --- Level 9+ Institutional Strategies (Hawkes, Cartea-Jaimungal, Hedger) - #
+    enable_hawkes: bool = True
+    hawkes_decay_beta: float = 2.0
+    hawkes_cascade_mult: float = 3.5
+    hawkes_critical_branching: float = 0.85
 
-    # --- Predictive layer (predictor.py) ----------------------------------- #
-    enable_predictor: bool = True
-    predictor_path: str = "predictor_state.json"
-    pred_weight: float = 0.8            # max blend of model vs legacy heuristics
-    pred_warmup_fills: int = 40         # fills until drift/adverse models get full weight
-    pred_fill_full_n: int = 600         # samples until fill model gets full weight
-    pred_hold_full_n: int = 400
-    pred_sample_s: float = 0.5
-    pred_fill_horizon_s: float = 2.0
-    pred_hold_horizon_s: float = 5.0
-    pred_adv_thresh_bps: float = 0.4    # drift below -this after a fill counts as "adverse"
-    pred_hold_loss_bps: float = 1.5
-    pred_veto_p: float = 0.78           # P(adverse) above which a quote must clear fee on its own
-    pred_hold_exit_p: float = 0.70      # P(big loss) needed for a predictive taker exit
-    pred_hold_exit_bps: float = 1.5     # expected further loss (bps) needed for a predictive taker exit
-    pred_hold_cost_mult: float = 1.0    # expected loss must exceed crossing cost x this
-    pred_size: bool = True              # scale adding size by P(fill pnl > 0)
+    enable_optimal_control: bool = True
+    cj_gamma: float = 0.15
+    cj_kappa: float = 1.5
+    cj_arrival_intensity: float = 5.0
+    cj_terminal_horizon_s: float = 300.0
+
+    enable_delta_hedging: bool = True
+    hedge_trigger_ratio: float = 0.75
+    target_hedge_ratio: float = 0.35
+    cascade_hedge_ratio: float = 0.45
+    max_hedge_tranche_usd: Decimal = Decimal("15.0")
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -322,26 +266,6 @@ class Config:
             markout_horizons_s=str(_e("MARKOUT_HORIZONS_S", "1,5,30")),
             enable_smart_inventory_mgmt=_b("ENABLE_SMART_INVENTORY_MGMT", "1"),
             taker_fee_bps=_d("TAKER_FEE_BPS", "2.2"),
-            taker_slip_bps=_d("TAKER_SLIP_BPS", "4"),
-            adv_obi_exit=_b("ADV_OBI_EXIT", "0"),
-            exclude_own_orders=_b("EXCLUDE_OWN_ORDERS", "0"),
-            enable_dynamic_sizing=_b("ENABLE_DYNAMIC_SIZING", "0"),
-            dyn_size_min=_d("DYN_SIZE_MIN", "0.25"),
-            dyn_inv_cap_frac=_d("DYN_INV_CAP_FRAC", "0.6"),
-            dyn_inv_min=_d("DYN_INV_MIN", "0.25"),
-            dyn_edge_ref_bps=_d("DYN_EDGE_REF_BPS", "0.4"),
-            dyn_edge_min_n=int(_e("DYN_EDGE_MIN_N", "4")),
-            dyn_warmup_mult=_d("DYN_WARMUP_MULT", "0.6"),
-            dyn_vol_ref_bps=_d("DYN_VOL_REF_BPS", "2.0"),
-            dyn_dd_weight=_d("DYN_DD_WEIGHT", "0.7"),
-            own_order_min_age_s=float(_e("OWN_ORDER_MIN_AGE_S", "0.3")),
-            session_loss_action=str(_e("SESSION_LOSS_ACTION", "halt")).lower(),
-            quote_dataset_min_s=float(_e("QUOTE_DATASET_MIN_S", "1.0")),
-            quote_dataset_max_mb=float(_e("QUOTE_DATASET_MAX_MB", "200")),
-            adv_obi_thresh=_d("ADV_OBI_THRESH", "0.85"),
-            adv_obi_secs=float(_e("ADV_OBI_SECS", "5")),
-            adv_obi_loss_bps=_d("ADV_OBI_LOSS_BPS", "2.0"),
-            taker_fill_price_mode=str(_e("TAKER_FILL_PRICE_MODE", "est")).lower(),
             emergency_taker_loss_bps=_d("EMERGENCY_TAKER_LOSS_BPS", "6.0"),
             emergency_taker_score_threshold=_d("EMERGENCY_TAKER_SCORE_THRESHOLD", "2.5"),
             enable_selective_touch=_b("ENABLE_SELECTIVE_TOUCH", "1"),
@@ -355,7 +279,6 @@ class Config:
             queue_reset_cost_bps=_d("QUEUE_RESET_COST_BPS", "0.20"),
             enable_absorption_mode=_b("ENABLE_ABSORPTION_MODE", "1"),
             enable_onesided_touch=_b("ENABLE_ONESIDED_TOUCH", "1"),
-            et_pause_windows=str(_e("ET_PAUSE_WINDOWS", "")),
             enable_quote_dataset=_b("ENABLE_QUOTE_DATASET", "1"),
             quote_dataset_path=str(_e("QUOTE_DATASET_PATH", f"quotes_{'paper' if dry else 'live'}_{market}.jsonl")),
             enable_empirical_learner=_b("ENABLE_EMPIRICAL_LEARNER", "1"),
@@ -368,9 +291,6 @@ class Config:
             max_actions_per_min=int(_e("MAX_ACTIONS_PER_MIN", 40)),
             loop_s=float(_e("LOOP_S", 0.25)),
             heartbeat_s=float(_e("HEARTBEAT_S", 5)),
-            dms_enabled=_b("DMS_ENABLED", "1"),
-            dms_ttl_s=min(300.0, max(6.0, float(_e("DMS_TTL_S", 30)))),
-            dms_required=_b("DMS_REQUIRED", "0"),
             reconcile_s=float(_e("RECONCILE_S", 5)),
             status_s=float(_e("STATUS_S", 15)),
             stale_s=float(_e("STALE_S", 15)),
@@ -378,40 +298,20 @@ class Config:
             max_oracle_dev_bps=_d("MAX_ORACLE_DEV_BPS", "150"),
             quote_outside_rth=_b("QUOTE_OUTSIDE_RTH", "0"),
             journal_path=str(_e("JOURNAL_PATH", f"fills_{'paper' if dry else 'live'}_{market}.jsonl")),
-            cross_feed=_b("CROSS_FEED", "1"),
-            cross_venues=str(_e("CROSS_VENUES", "binance,bybit")).lower(),
-            binance_symbol=str(_e("BINANCE_SYMBOL", "")).upper(),
-            bybit_symbol=str(_e("BYBIT_SYMBOL", "")).upper(),
-            binance_ws_url=str(_e("BINANCE_WS_URL", "wss://fstream.binance.com")).rstrip("/"),
-            bybit_ws_url=str(_e("BYBIT_WS_URL", "wss://stream.bybit.com/v5/public/linear")),
-            cross_stale_s=float(_e("CROSS_STALE_S", 2.0)),
-            cross_basis_tau_s=float(_e("CROSS_BASIS_TAU_S", 45)),
-            cross_warmup_s=float(_e("CROSS_WARMUP_S", 10)),
-            cross_max_shift_bps=float(_e("CROSS_MAX_SHIFT_BPS", 4.0)),
-            cross_flow_k_usd=float(_e("CROSS_FLOW_K_USD", 20000)),
-            cross_weights=_parse_weights(str(_e("CROSS_WEIGHTS", "binance:1.0,bybit:0.8"))),
-            cross_pull_bps=float(_e("CROSS_PULL_BPS", 2.5)),
-            cross_vel_pull_bps=float(_e("CROSS_VEL_PULL_BPS", 3.0)),
-            cross_pull_hold_s=float(_e("CROSS_PULL_HOLD_S", 1.5)),
-            cross_liq_usd=float(_e("CROSS_LIQ_USD", 50000)),
-            cross_div_adverse_mult=float(_e("CROSS_DIV_ADVERSE_MULT", 1.0)),
-            cross_flow_weight=float(_e("CROSS_FLOW_WEIGHT", 0.3)),
-            enable_predictor=_b("ENABLE_PREDICTOR", "1"),
-            predictor_path=str(_e("PREDICTOR_PATH", f"predictor_{'paper' if dry else 'live'}_{market}.json")),
-            pred_weight=float(_e("PRED_WEIGHT", 0.8)),
-            pred_warmup_fills=int(_e("PRED_WARMUP_FILLS", 40)),
-            pred_fill_full_n=int(_e("PRED_FILL_FULL_N", 600)),
-            pred_hold_full_n=int(_e("PRED_HOLD_FULL_N", 400)),
-            pred_sample_s=float(_e("PRED_SAMPLE_S", 0.5)),
-            pred_fill_horizon_s=float(_e("PRED_FILL_HORIZON_S", 2.0)),
-            pred_hold_horizon_s=float(_e("PRED_HOLD_HORIZON_S", 5.0)),
-            pred_adv_thresh_bps=float(_e("PRED_ADV_THRESH_BPS", 0.4)),
-            pred_hold_loss_bps=float(_e("PRED_HOLD_LOSS_BPS", 1.5)),
-            pred_veto_p=float(_e("PRED_VETO_P", 0.78)),
-            pred_hold_exit_p=float(_e("PRED_HOLD_EXIT_P", 0.70)),
-            pred_hold_exit_bps=float(_e("PRED_HOLD_EXIT_BPS", 1.5)),
-            pred_hold_cost_mult=float(_e("PRED_HOLD_COST_MULT", 1.0)),
-            pred_size=_b("PRED_SIZE", "1"),
+            enable_hawkes=_b("ENABLE_HAWKES", "1"),
+            hawkes_decay_beta=float(_e("HAWKES_DECAY_BETA", 2.0)),
+            hawkes_cascade_mult=float(_e("HAWKES_CASCADE_MULT", 3.5)),
+            hawkes_critical_branching=float(_e("HAWKES_CRITICAL_BRANCHING", 0.85)),
+            enable_optimal_control=_b("ENABLE_OPTIMAL_CONTROL", "1"),
+            cj_gamma=float(_e("CJ_GAMMA", 0.15)),
+            cj_kappa=float(_e("CJ_KAPPA", 1.5)),
+            cj_arrival_intensity=float(_e("CJ_ARRIVAL_INTENSITY", 5.0)),
+            cj_terminal_horizon_s=float(_e("CJ_TERMINAL_HORIZON_S", 300.0)),
+            enable_delta_hedging=_b("ENABLE_DELTA_HEDGING", "1"),
+            hedge_trigger_ratio=float(_e("HEDGE_TRIGGER_RATIO", 0.75)),
+            target_hedge_ratio=float(_e("TARGET_HEDGE_RATIO", 0.35)),
+            cascade_hedge_ratio=float(_e("CASCADE_HEDGE_RATIO", 0.45)),
+            max_hedge_tranche_usd=_d("MAX_HEDGE_TRANCHE_USD", "15.0"),
         )
         if cfg.max_position_usd < cfg.order_usd:
             raise Fatal("MAX_POSITION_USD must be >= ORDER_USD")
