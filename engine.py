@@ -75,30 +75,9 @@ class MarketMakingEngine:
             if basis != ZERO:
                 basis_shift = -base_mid * (basis / BPS) * Decimal("0.05")
 
-        # IMPORTANT: do not clamp fair value to the current touch.  Doing so
-        # destroys the very signal we are trying to use for adverse-selection
-        # protection: when the book/flow predicts that the next trade is away
-        # from the touch, fair value must be allowed to move outside the spread.
-        # The old implementation flattened all such predictions to [bid, ask].
-        ret_bps = md.ret_bps(self.cfg.trend_window_s, now)
-        trend_cap = getattr(self.cfg, "trend_pull_bps", Decimal("2.5"))
-        # Half of the observed short-horizon move is deliberately conservative;
-        # cap it so a single noisy return cannot move the reservation price too far.
-        trend_shift_bps = clamp(ret_bps * Decimal("0.5"), -trend_cap, trend_cap)
-        trend_shift = base_mid * (trend_shift_bps / BPS)
-
-        fair_val = (micro + obi_shift + tfi_shift + cross_shift +
-                    cross_obi_shift + basis_shift + trend_shift)
-
-        # Keep the model bounded, but around the mid rather than around the
-        # current spread.  This preserves directional information while
-        # preventing stale/outlier inputs from generating absurd quotes.
-        max_shift_bps = max(Decimal("6.0"), trend_cap * Decimal("2.0"))
-        fair_val = clamp(
-            fair_val,
-            base_mid * (ONE - max_shift_bps / BPS),
-            base_mid * (ONE + max_shift_bps / BPS),
-        )
+        fair_val = micro + obi_shift + tfi_shift + cross_shift + cross_obi_shift + basis_shift
+        if md.bid and md.ask and md.bid < md.ask:
+            fair_val = clamp(fair_val, md.bid, md.ask)
         return fair_val
 
     def fill_probability(self, distance_bps: Decimal, ledger: Optional[Ledger] = None) -> float:
@@ -446,18 +425,6 @@ class MarketMakingEngine:
         severe_sell_pressure = (flow_bias < Decimal("-0.50") or (is_toxic and md.obi < Decimal("-0.55")) or (has_adverse_selling and ret_5s < Decimal("-0.5")))
         severe_buy_pressure = (flow_bias > Decimal("0.50") or (is_toxic and md.obi > Decimal("0.55")) or (has_adverse_buying and ret_5s > Decimal("0.5")))
 
-        # Confirmed directional flow is a stronger signal than either input alone.
-        # In that state the touch order is usually the most adversely selected
-        # order, so keep only deeper liquidity rather than repeatedly sitting at
-        # the touch.  This is intentionally narrower than the severe-pressure
-        # guard above.
-        confirmed_sell_trend = (
-            ret_5s <= Decimal("-0.75") and flow_bias <= Decimal("-0.25")
-        )
-        confirmed_buy_trend = (
-            ret_5s >= Decimal("0.75") and flow_bias >= Decimal("0.25")
-        )
-
         depth_widen_buy = ZERO
         depth_widen_sell = ZERO
         depth_cut_buy = ZERO
@@ -497,14 +464,6 @@ class MarketMakingEngine:
             dyn_sell = self.dynamic_size_mult(SELL, pos_usd, md, ledger, regime, now)
             level_usd_buy = max(level_usd * (ONE - depth_cut_buy) * dyn_buy, m.min_notional)
             level_edge_sell = level_edge + depth_widen_sell
-
-            # TREND_PULL_BPS used to be read but never applied to ordinary
-            # maker quotes.  Penalize only the side that is fighting momentum.
-            trend_widen_bps = min(trend_pull, abs(ret_5s) * Decimal("0.5"))
-            if ret_5s < ZERO:
-                level_edge_buy += trend_widen_bps
-            elif ret_5s > ZERO:
-                level_edge_sell += trend_widen_bps
             level_usd_sell = max(level_usd * (ONE - depth_cut_sell) * dyn_sell, m.min_notional)
 
             # --- BUY SIDE --- #
@@ -525,6 +484,12 @@ class MarketMakingEngine:
                         if cross_velo > ZERO:
                             adv_score += cross_velo * Decimal("0.5")
                     adv_score += (sell_tox / Decimal("5.0"))
+                    # Forward-looking: what does the empirical markout model expect for a BUY right now in this
+                    # regime? A positive prediction (price tends to keep rising after buys here) means the cost
+                    # of covering this short is expected to keep growing -> treat like realized adverse flow.
+                    # Only ever ADDS urgency (clamped at ZERO) - never relaxes the existing exit triggers.
+                    pred_exit_m = l.predict_markout(BUY, regime, 0, self.cfg.queue_horizon_s) if (l and hasattr(l, "predict_markout")) else ZERO
+                    adv_score += max(ZERO, pred_exit_m) * Decimal("0.5")
 
                     trigger_taker = False
                     taker_why = ""
@@ -620,7 +585,7 @@ class MarketMakingEngine:
                 suppress_buy = (already_long and (k == 0 or (has_adverse_selling and ret_5s < Decimal("-0.5")) or severe_sell_pressure)) or (chasing_top and k == 0)
                 if getattr(self.cfg, "enable_onesided_touch", True) and k == 0 and is_toxic and flow_bias <= Decimal("-0.40"):
                     suppress_buy = True
-                can_add = (not buy_blocked) and (not severe_sell_pressure) and (not toxic_extra_level) and (not suppress_buy) and (not (confirmed_sell_trend and k == 0)) and (remaining_buy_usd >= level_usd)
+                can_add = (not buy_blocked) and (not severe_sell_pressure) and (not toxic_extra_level) and (not suppress_buy) and (remaining_buy_usd >= level_usd)
                 if can_add:
                     if k == 0 and getattr(self.cfg, "enable_selective_touch", True):
                         fragility = md.liquidity_fragility(BUY, now) if hasattr(md, "liquidity_fragility") else ZERO
@@ -726,10 +691,7 @@ class MarketMakingEngine:
                         if qty < m.min_size and (m.min_size * cand_px <= remaining_buy_usd * Decimal("1.05")):
                             qty = m.min_size
                         if qty >= m.min_size:
-                            eff_min_ev_base = max(
-                                min_ev_base * Decimal("0.50"),
-                                min_ev_base if not is_liquid_market else spr_bps * Decimal("0.25")
-                            )
+                            eff_min_ev_base = min(min_ev_base, spr_bps * Decimal("0.25")) if is_liquid_market else min_ev_base
                             min_ev = max(ZERO, eff_min_ev_base - self.cfg.ev_hysteresis_bps) if (existing_slots and (k, BUY) in existing_slots) else eff_min_ev_base
                             if (not self.cfg.enable_adaptive_ev) or (ev_bps >= min_ev):
                                 quotes.append(QuoteTarget(
@@ -757,6 +719,12 @@ class MarketMakingEngine:
                         if cross_velo < ZERO:
                             adv_score += abs(cross_velo) * Decimal("0.5")
                     adv_score += (buy_tox / Decimal("5.0"))
+                    # Forward-looking: what does the empirical markout model expect for a SELL right now in this
+                    # regime? A positive prediction (price tends to keep falling after sells here) means this
+                    # long is expected to keep losing -> treat like realized adverse flow. Only ever ADDS
+                    # urgency (clamped at ZERO) - never relaxes the existing exit triggers.
+                    pred_exit_m = l.predict_markout(SELL, regime, 0, self.cfg.queue_horizon_s) if (l and hasattr(l, "predict_markout")) else ZERO
+                    adv_score += max(ZERO, pred_exit_m) * Decimal("0.5")
 
                     trigger_taker = False
                     taker_why = ""
@@ -852,7 +820,7 @@ class MarketMakingEngine:
                 suppress_sell = (already_short and (k == 0 or (has_adverse_buying and ret_5s > Decimal("0.5")) or severe_buy_pressure)) or (chasing_bottom and k == 0)
                 if getattr(self.cfg, "enable_onesided_touch", True) and k == 0 and is_toxic and flow_bias >= Decimal("0.40"):
                     suppress_sell = True
-                can_add = (not sell_blocked) and (not severe_buy_pressure) and (not toxic_extra_level) and (not suppress_sell) and (not (confirmed_buy_trend and k == 0)) and (remaining_sell_usd >= level_usd)
+                can_add = (not sell_blocked) and (not severe_buy_pressure) and (not toxic_extra_level) and (not suppress_sell) and (remaining_sell_usd >= level_usd)
                 if can_add:
                     if k == 0 and getattr(self.cfg, "enable_selective_touch", True):
                         fragility = md.liquidity_fragility(SELL, now) if hasattr(md, "liquidity_fragility") else ZERO
@@ -958,10 +926,7 @@ class MarketMakingEngine:
                         if qty < m.min_size and (m.min_size * cand_px <= remaining_sell_usd * Decimal("1.05")):
                             qty = m.min_size
                         if qty >= m.min_size:
-                            eff_min_ev_base = max(
-                                min_ev_base * Decimal("0.50"),
-                                min_ev_base if not is_liquid_market else spr_bps * Decimal("0.25")
-                            )
+                            eff_min_ev_base = min(min_ev_base, spr_bps * Decimal("0.25")) if is_liquid_market else min_ev_base
                             min_ev = max(ZERO, eff_min_ev_base - self.cfg.ev_hysteresis_bps) if (existing_slots and (k, SELL) in existing_slots) else eff_min_ev_base
                             if (not self.cfg.enable_adaptive_ev) or (ev_bps >= min_ev):
                                 quotes.append(QuoteTarget(
