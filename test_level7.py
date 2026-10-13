@@ -785,5 +785,81 @@ class TestLevel7MarketMaker(unittest.IsolatedAsyncioTestCase):
 
         print('✓ test_31_spread_capture_strictly_positive_across_unwind_and_ladder passed: Positive spread capture verified.')
 
+    async def test_32_two_sided_quoting_and_positive_spread_on_funding_markets(self):
+        """Verify that on markets with positive funding rate, the bot quotes both sides symmetrically when flat,
+        does not accumulate negative inventory bias, and locks in strictly positive spread on roundtrip fills."""
+        from orders import Order
+        bot, s, clock = sim.make(ORDER_USD=20, MAX_POSITION_USD=100, ENABLE_SMART_INVENTORY_MGMT=1, ENABLE_FUNDING_CARRY=1)
+        m = sim.Market(1, "BTC-USD", "ONLINE", D("0.1"), D("0.0001"), [], D("5"), D("0.0001"), D("100000"), D("80000.0"), False)
+        m.funding_rate = D("0.0005") # 5 bps positive funding rate
+        bot.md.info = m
+
+        # 1. Flat state: Bot must quote both bids and asks
+        bot.md.update(D("80000.0"), D("80010.0"), D("1.0"), D("1.0"), clock.t)
+        quotes = bot.engine.generate_ladder_quotes(m, bot.md, bot.ledger, clock.t, False, False)
+        bids = [q for q in quotes if q.side == BUY]
+        asks = [q for q in quotes if q.side == SELL]
+        self.assertGreater(len(bids), 0, "Bot must place bids when flat despite positive funding rate")
+        self.assertGreater(len(asks), 0, "Bot must place asks when flat despite positive funding rate")
+
+        # 2. Fill ask: Bot enters short
+        sell_q = asks[0]
+        bot._on_fill(SELL, sell_q.qty, sell_q.price, Order("s1", 0, SELL, sell_q.price, sell_q.qty, sell_q.qty, 0, clock.t, clock.t, quote_mid=D("80005.0")))
+        self.assertEqual(bot.ledger.position, -sell_q.qty)
+
+        # 3. Unwind quote must be at profitable touch
+        clock.t += 1.0
+        bot.md.update(D("80000.0"), D("80010.0"), D("1.0"), D("1.0"), clock.t)
+        unwind_quotes = bot.engine.generate_ladder_quotes(m, bot.md, bot.ledger, clock.t, False, False)
+        unwind_buys = [q for q in unwind_quotes if q.side == BUY]
+        self.assertGreater(len(unwind_buys), 0, "Must place unwind buy quote")
+        self.assertLessEqual(unwind_buys[0].price, D("80000.0"), "Unwind quote must not cross bid")
+
+        # 4. Fill unwind buy: Locks in positive spread and PnL
+        buy_q = unwind_buys[0]
+        bot._on_fill(BUY, buy_q.qty, buy_q.price, Order("b1", 0, BUY, buy_q.price, buy_q.qty, buy_q.qty, 0, clock.t, clock.t, quote_mid=D("80005.0")))
+        self.assertEqual(bot.ledger.position, D(0), "Bot must be flat after roundtrip")
+        self.assertGreater(bot.ledger.realized, D(0), "Realized PnL must be strictly positive")
+        self.assertGreater(bot.ledger.spread_capture, D(0), "Spread capture must be strictly positive")
+        print("✓ test_32_two_sided_quoting_and_positive_spread_on_funding_markets passed: Balanced quoting and positive spread verified.")
+
+    async def test_33_ultra_thin_liquid_market_spread_capture_and_touch_quoting(self):
+        """Verify that on ultra-thin liquid markets (e.g. 0.1 bps spread), the bot quotes directly at the touch,
+        does not offset quotes 100+ ticks away, and completes round-trips capturing positive spread."""
+        from orders import Order
+        bot, s, clock = sim.make(ORDER_USD=20, MAX_POSITION_USD=100, EXTRA_LEVELS=1)
+        m = sim.Market(1, "BTC-USD", "ONLINE", D("0.1"), D("0.0001"), [], D("5"), D("0.0001"), D("100000"), D("80000.0"), False)
+        bot.md.info = m
+
+        bot.md.update(D("80000.0"), D("80000.8"), D("10.0"), D("10.0"), clock.t)
+        quotes = bot.engine.generate_ladder_quotes(m, bot.md, bot.ledger, clock.t, False, False)
+        
+        bids = [q for q in quotes if q.side == BUY]
+        asks = [q for q in quotes if q.side == SELL]
+        self.assertGreaterEqual(len(bids), 1, "Must quote bids on liquid market")
+        self.assertGreaterEqual(len(asks), 1, "Must quote asks on liquid market")
+        
+        # Level 0 must be at the touch
+        self.assertEqual(bids[0].price, D("80000.0"), "L0 bid must be at touch 80000.0")
+        self.assertEqual(asks[0].price, D("80000.8"), "L0 ask must be at touch 80000.8")
+        
+        # Fill buy at bid:
+        bot._on_fill(BUY, bids[0].qty, bids[0].price, Order("b1", 0, BUY, bids[0].price, bids[0].qty, bids[0].qty, 0, clock.t, clock.t, quote_mid=D("80000.4")))
+        
+        # Check unwind sell quote at ask:
+        clock.t += 0.5
+        bot.md.update(D("80000.0"), D("80000.8"), D("10.0"), D("10.0"), clock.t)
+        unwind_quotes = bot.engine.generate_ladder_quotes(m, bot.md, bot.ledger, clock.t, False, False)
+        unwind_sells = [q for q in unwind_quotes if q.side == SELL]
+        self.assertGreater(len(unwind_sells), 0, "Must place unwind sell quote")
+        self.assertEqual(unwind_sells[0].price, D("80000.8"), "Unwind sell must be at market ask 80000.8")
+        
+        # Fill unwind sell:
+        bot._on_fill(SELL, unwind_sells[0].qty, unwind_sells[0].price, Order("s1", 0, SELL, unwind_sells[0].price, unwind_sells[0].qty, unwind_sells[0].qty, 0, clock.t, clock.t, quote_mid=D("80000.4")))
+        self.assertEqual(bot.ledger.position, D(0), "Position should be flat")
+        self.assertGreater(bot.ledger.realized, D(0), "Realized PnL must be strictly positive")
+        self.assertGreater(bot.ledger.spread_capture, D(0), "Spread capture must be strictly positive")
+        print("✓ test_33_ultra_thin_liquid_market_spread_capture_and_touch_quoting passed: Direct touch quoting and spread capture verified.")
+
 if __name__ == "__main__":
     unittest.main()

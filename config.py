@@ -169,24 +169,6 @@ class Config:
     quote_outside_rth: bool
     journal_path: str
 
-    # --- Level 9+ Institutional Strategies (Hawkes, Cartea-Jaimungal, Hedger) - #
-    enable_hawkes: bool = True
-    hawkes_decay_beta: float = 2.0
-    hawkes_cascade_mult: float = 3.5
-    hawkes_critical_branching: float = 0.85
-
-    enable_optimal_control: bool = True
-    cj_gamma: float = 0.15
-    cj_kappa: float = 1.5
-    cj_arrival_intensity: float = 5.0
-    cj_terminal_horizon_s: float = 300.0
-
-    enable_delta_hedging: bool = True
-    hedge_trigger_ratio: float = 0.75
-    target_hedge_ratio: float = 0.35
-    cascade_hedge_ratio: float = 0.45
-    max_hedge_tranche_usd: Decimal = Decimal("15.0")
-
     @classmethod
     def from_env(cls) -> "Config":
         env_name = str(_e("ARCUS_ENV", "testnet")).lower()
@@ -298,20 +280,6 @@ class Config:
             max_oracle_dev_bps=_d("MAX_ORACLE_DEV_BPS", "150"),
             quote_outside_rth=_b("QUOTE_OUTSIDE_RTH", "0"),
             journal_path=str(_e("JOURNAL_PATH", f"fills_{'paper' if dry else 'live'}_{market}.jsonl")),
-            enable_hawkes=_b("ENABLE_HAWKES", "1"),
-            hawkes_decay_beta=float(_e("HAWKES_DECAY_BETA", 2.0)),
-            hawkes_cascade_mult=float(_e("HAWKES_CASCADE_MULT", 3.5)),
-            hawkes_critical_branching=float(_e("HAWKES_CRITICAL_BRANCHING", 0.85)),
-            enable_optimal_control=_b("ENABLE_OPTIMAL_CONTROL", "1"),
-            cj_gamma=float(_e("CJ_GAMMA", 0.15)),
-            cj_kappa=float(_e("CJ_KAPPA", 1.5)),
-            cj_arrival_intensity=float(_e("CJ_ARRIVAL_INTENSITY", 5.0)),
-            cj_terminal_horizon_s=float(_e("CJ_TERMINAL_HORIZON_S", 300.0)),
-            enable_delta_hedging=_b("ENABLE_DELTA_HEDGING", "1"),
-            hedge_trigger_ratio=float(_e("HEDGE_TRIGGER_RATIO", 0.75)),
-            target_hedge_ratio=float(_e("TARGET_HEDGE_RATIO", 0.35)),
-            cascade_hedge_ratio=float(_e("CASCADE_HEDGE_RATIO", 0.45)),
-            max_hedge_tranche_usd=_d("MAX_HEDGE_TRANCHE_USD", "15.0"),
         )
         if cfg.max_position_usd < cfg.order_usd:
             raise Fatal("MAX_POSITION_USD must be >= ORDER_USD")

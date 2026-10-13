@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Optional, List, Tuple
 
-from utils import BPS, ZERO, ONE, clamp, BUY, SELL
+from utils import BPS, ZERO, ONE, clamp
 
 
 @dataclass
@@ -155,15 +155,6 @@ class MarketData:
         self.cross = CrossVenueTracker()
         self.funding_rate: Decimal = ZERO
         self.next_funding_time: float = 0.0
-        if getattr(cfg, "enable_hawkes", True):
-            from hawkes import HawkesProcessEngine
-            self.hawkes: Optional[HawkesProcessEngine] = HawkesProcessEngine(
-                decay_beta=getattr(cfg, "hawkes_decay_beta", 2.0),
-                cascade_threshold_multiplier=getattr(cfg, "hawkes_cascade_mult", 3.5),
-                critical_branching_ratio=getattr(cfg, "hawkes_critical_branching", 0.85),
-            )
-        else:
-            self.hawkes = None
 
     def clear_book(self) -> None:
         self.bid = self.ask = self.bid_sz = self.ask_sz = None
@@ -189,40 +180,10 @@ class MarketData:
         self._trades.append((now, side.upper(), size, price))
         while self._trades and now - self._trades[0][0] > 60.0:
             self._trades.popleft()
-        if hasattr(self, "hawkes") and self.hawkes is not None:
-            ev_type = "buy" if side.upper() == BUY else "sell"
-            self.hawkes.record_event(ev_type, now, float(size))
 
     def on_depth(self, bids: list, asks: list, now: float) -> None:
-        if hasattr(self, "hawkes") and self.hawkes is not None:
-            old_bids_sz = sum(float(b[1]) for b in self._book_depth_bids[:3]) if self._book_depth_bids else 0.0
-            new_bids_sz = sum(float(b[1]) for b in bids[:3]) if bids else 0.0
-            old_asks_sz = sum(float(a[1]) for a in self._book_depth_asks[:3]) if self._book_depth_asks else 0.0
-            new_asks_sz = sum(float(a[1]) for a in asks[:3]) if asks else 0.0
-            if (old_bids_sz > 0 and new_bids_sz < old_bids_sz * 0.5) or (old_asks_sz > 0 and new_asks_sz < old_asks_sz * 0.5):
-                self.hawkes.record_event("cancel", now, 1.0)
         self._book_depth_bids = bids
         self._book_depth_asks = asks
-
-    def hawkes_cascade_active(self, side: str, now: float) -> bool:
-        if getattr(self, "hawkes", None) is not None:
-            return self.hawkes.is_cascade_active(side, now)
-        return False
-
-    def hawkes_skew_bps(self, side: str, now: float) -> Decimal:
-        if getattr(self, "hawkes", None) is not None:
-            return self.hawkes.get_quote_skew_bps(side, now)
-        return ZERO
-
-    def hawkes_branching_ratio(self) -> float:
-        if getattr(self, "hawkes", None) is not None:
-            return self.hawkes.get_branching_ratio()
-        return 0.0
-
-    def hawkes_directional_bias(self, now: float) -> float:
-        if getattr(self, "hawkes", None) is not None:
-            return self.hawkes.get_directional_bias(now)
-        return 0.0
 
     def update_cross_venue(self, venue: str, bid: Decimal, ask: Decimal,
                            bid_sz: Decimal, ask_sz: Decimal, now: float) -> None:

@@ -266,13 +266,18 @@ class OrderManager:
                     should_modify = True
                     urgent = True
 
-                if is_retreating and drift >= self.cfg.retreat_bps:
+                m = self.get_market()
+                tick_bps = (m.tick / existing.price) * Decimal("10000") if existing.price > 0 else Decimal("0.1")
+                eff_retreat = min(self.cfg.retreat_bps, tick_bps * Decimal("0.9"))
+                eff_requote = min(self.cfg.requote_bps, tick_bps * Decimal("0.9"))
+
+                if is_retreating and (drift >= eff_retreat or abs(t.price - existing.price) >= m.tick):
                     should_modify = True
                     urgent = True
-                elif is_advancing and drift >= self.cfg.requote_bps and (now - existing.last_action >= (getattr(self.cfg, "touch_min_requote_s", self.cfg.min_requote_s) if existing.pair_index == 0 else self.cfg.min_requote_s)):
+                elif is_advancing and (drift >= eff_requote or abs(t.price - existing.price) >= m.tick) and (now - existing.last_action >= (getattr(self.cfg, "touch_min_requote_s", self.cfg.min_requote_s) if existing.pair_index == 0 else self.cfg.min_requote_s)):
                     queue_reset_cost = getattr(self.cfg, "queue_reset_cost_bps", Decimal("0.20"))
                     ev_gain = getattr(t, "expected_value_bps", Decimal(0)) - getattr(existing, "ev_bps", Decimal(0))
-                    if ev_gain >= queue_reset_cost or drift >= (self.cfg.requote_bps * Decimal("1.5")):
+                    if ev_gain >= queue_reset_cost or drift >= (self.cfg.requote_bps * Decimal("1.5")) or abs(t.price - existing.price) >= m.tick:
                         should_modify = True
 
                 if should_modify:
